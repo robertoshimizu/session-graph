@@ -126,3 +126,70 @@ PREFIX data:    <http://devkg.local/data/>
 # GROUP BY ?label1 ?label2
 # ORDER BY DESC(?cooccurrences)
 # LIMIT 20
+
+# =============================================================================
+# Query 9: Sessions by platform
+# =============================================================================
+# SELECT ?platform (COUNT(?session) AS ?count) WHERE {
+#   ?session a devkg:Session ;
+#            devkg:hasSourcePlatform ?platform .
+# }
+# GROUP BY ?platform
+# ORDER BY DESC(?count)
+
+# =============================================================================
+# Query 10: Shared entities across platforms (cross-platform knowledge overlap)
+# =============================================================================
+# SELECT ?label (COUNT(DISTINCT ?platform) AS ?platforms) WHERE {
+#   ?triple a devkg:KnowledgeTriple ;
+#           devkg:tripleSubject ?entity ;
+#           devkg:extractedInSession ?session .
+#   ?session devkg:hasSourcePlatform ?platform .
+#   ?entity rdfs:label ?label .
+# }
+# GROUP BY ?label
+# HAVING(COUNT(DISTINCT ?platform) > 1)
+# ORDER BY DESC(?platforms)
+
+# =============================================================================
+# Query 11: Knowledge triples by platform
+# =============================================================================
+# SELECT ?platform (COUNT(?triple) AS ?triples) WHERE {
+#   ?triple a devkg:KnowledgeTriple ;
+#           devkg:extractedInSession ?session .
+#   ?session devkg:hasSourcePlatform ?platform .
+# }
+# GROUP BY ?platform
+# ORDER BY DESC(?triples)
+
+# =============================================================================
+# Query 12: Entities with Wikidata links
+# =============================================================================
+# PREFIX owl: <http://www.w3.org/2002/07/owl#>
+# SELECT ?label ?wikidataURI WHERE {
+#   ?entity a devkg:Entity ;
+#           rdfs:label ?label ;
+#           owl:sameAs ?wikidataURI .
+#   FILTER(STRSTARTS(STR(?wikidataURI), "http://www.wikidata.org"))
+# }
+# ORDER BY ?label
+
+# =============================================================================
+# Query 13: Source file traceability
+# =============================================================================
+# SELECT ?session ?platform ?sourceFile WHERE {
+#   ?session a devkg:Session ;
+#            devkg:hasSourcePlatform ?platform ;
+#            devkg:hasSourceFile ?sourceFile .
+# }
+# ORDER BY ?platform
+
+# =============================================================================
+# Query 14: Sessions by project
+# =============================================================================
+# SELECT ?projectLabel (COUNT(?session) AS ?sessions) WHERE {
+#   ?session devkg:belongsToProject ?project .
+#   ?project rdfs:label ?projectLabel .
+# }
+# GROUP BY ?projectLabel
+# ORDER BY DESC(?sessions)

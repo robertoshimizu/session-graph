@@ -155,6 +155,11 @@ devkg:hasSourcePlatform a owl:DatatypeProperty ;
     rdfs:domain devkg:Session ;
     rdfs:range xsd:string .
 
+devkg:hasWorkingDirectory a owl:DatatypeProperty ;
+    rdfs:label "has working directory"@en ;
+    rdfs:comment "The filesystem working directory at the time of a message or tool call."@en ;
+    rdfs:range xsd:string .
+
 # =============================================================================
 # SKOS Concept Scheme and Example Concepts
 # =============================================================================
@@ -395,3 +400,24 @@ devkg:extractedInSession a owl:ObjectProperty ;
     rdfs:comment "Links a knowledge triple to the session in which it was extracted."@en ;
     rdfs:domain devkg:KnowledgeTriple ;
     rdfs:range devkg:Session .
+
+# =============================================================================
+# Sprint 3: Project and Source Tracking
+# =============================================================================
+
+# --- Project: a development project spanning multiple sessions ---
+devkg:Project a owl:Class ;
+    rdfs:subClassOf prov:Entity ;
+    rdfs:label "Project"@en ;
+    rdfs:comment "A development project spanning multiple sessions."@en .
+
+devkg:hasSourceFile a owl:DatatypeProperty ;
+    rdfs:label "has source file"@en ;
+    rdfs:comment "Filesystem path or URI of the raw source data."@en ;
+    rdfs:range xsd:string .
+
+devkg:belongsToProject a owl:ObjectProperty ;
+    rdfs:label "belongs to project"@en ;
+    rdfs:comment "Links a session to the project it belongs to."@en ;
+    rdfs:domain devkg:Session ;
+    rdfs:range devkg:Project .

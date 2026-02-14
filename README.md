@@ -350,6 +350,18 @@ data:entity/devkg-ontology a devkg:Entity ;
 
 **Wikidata coverage: ~88%** for mainstream dev tools. DBpedia lags on post-2020 tools. ~30-40% of entities will be project-specific (no external match) — these stay as local entities with no knowledge lost.
 
+### Wikidata API Authentication
+
+The Wikidata API **does not require an API key** for read operations. Both the Action API (`wbsearchentities`, `wbgetentities`) and the REST API are fully open for reads without authentication, registration, or OAuth.
+
+**Requirements for read access:**
+- **`User-Agent` header** — Wikimedia policy requires a descriptive header (e.g., `DevKnowledgeGraph/1.0 (your-email@example.com)`) for identification, not authentication. Requests without one may be deprioritized or blocked.
+- **Rate limiting** — No hard limit on reads, but ~1 request/sec is considered polite. HTTP 429 with `Retry-After` header is returned if exceeded.
+
+**Authentication (OAuth 2.0) is only required for write operations** (creating/editing entities), which this project does not perform.
+
+Reference: [Wikidata:REST_API/Authentication](https://www.wikidata.org/wiki/Wikidata:REST_API/Authentication), [API:Etiquette](https://www.mediawiki.org/wiki/API:Etiquette)
+
 ### Why Not LLM-Only QIDs?
 
 LLMs hallucinate Wikidata Q-numbers. QIDs are opaque identifiers — LLMs can't reliably generate `Q1628290` for Neo4j. The hybrid approach uses the LLM for what it's good at (canonicalization, context-aware disambiguation) and the API for what it's good at (authoritative identifiers).

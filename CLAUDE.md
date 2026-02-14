@@ -393,28 +393,197 @@ test/quick_links.ttl                           # Validated RDF output
 
 ---
 
-## Next Steps (Sprint 3)
+## Sprint 3 Results (2026-02-14): Multi-Platform Pipeline + Entity Linking
 
-1. **P0**: Wikidata entity linking integration
-   - Extract unique entities from existing RDF triples
-   - Run batch Wikidata linking on all sessions
-   - Update SPARQL queries to leverage owl:sameAs + Wikidata properties
-   - Entity normalization via Wikidata canonical labels
+### What Was Built
 
-2. **P0**: Process ALL Claude Code sessions (not just 1) — bulk run across `~/.claude/projects/**/*.jsonl`
+- [x] **Ontology extensions**: `devkg:Project`, `devkg:hasSourceFile`, `devkg:belongsToProject`, `devkg:hasWorkingDirectory`
+- [x] **Shared module** (`pipeline/common.py`, 219 lines): Namespace constants, URI helpers, RDF node builders — used by all 5 parsers
+- [x] **DeepSeek parser** (`pipeline/deepseek_to_rdf.py`, 370 lines): JSON zip with tree-structured mapping
+- [x] **Grok parser** (`pipeline/grok_to_rdf.py`, 267 lines): MongoDB JSON with `$date.$numberLong` timestamps
+- [x] **Warp parser** (`pipeline/warp_to_rdf.py`, 313 lines): SQLite with `ai_queries` table. Only useful when sessions have bulk content; most Warp AI sessions are too thin (user queries only, no assistant responses stored)
+- [x] **Retry logic** in `triple_extraction.py`: MAX_RETRIES=2, shorter input on retry
+- [x] **Enhanced entity linking** (`pipeline/link_entities.py`, 422 lines): SQLite cache, batch mode from .ttl files, 31 alias mappings
+- [x] **Batch extraction skeleton** (`pipeline/batch_extraction.py`, 252 lines): Gemini Batch Prediction via GCS
+- [x] **Automation skeletons**: `hooks/post_session_hook.sh`, `daemon/sync_daemon.py`
+- [x] **SPARQL queries 9-14**: Cross-platform verification
+- [x] **Refactored `jsonl_to_rdf.py`**: imports from common.py, hasSourceFile + Project detection
 
-3. **P1**: Add retry logic for truncated Gemini responses (currently ~5% loss)
+### Integration Results
 
-4. **P1**: Entity deduplication — merge `oracle` and `oracle database`, `websocket` and `websocket server`
+| Platform | Messages | Knowledge Triples | Notes |
+|----------|----------|-------------------|-------|
+| Claude Code | 55 | 180 | Full session with tool calls |
+| DeepSeek | 8 | 111 | MCP integration conversation |
+| Grok | 14 | 165 | Medical diagnosis logic |
+| Warp | 12 | 3 | User queries only (thin data) |
 
-5. **P1**: Stopword filter for non-technical entities (`/exit`, `command name`)
+- **7,462 total RDF triples** loaded in Fuseki
+- **233 Wikidata owl:sameAs links** (51.8% of 450 entities)
+- **8 cross-platform entities**: api, server, python, database, client, http, go, db
+- **Federated SPARQL → Wikidata** verified working (e.g., "What is Python?" returns Wikidata description + local KG relationships)
 
-6. **P2**: Evaluate LangChain `LLMGraphTransformer` for comparison
+### Agentic Entity Linking (Sprint 3.5)
 
-7. **P2**: Evaluate Graphiti for temporal relationship tracking
+Replaced naive heuristic entity linker with **ReAct agent** using LLM + Wikidata API tool:
 
-8. **P2**: Set up Neo4j locally as alternative/complement to Fuseki
+| Approach | Precision | Avg Latency | Notes |
+|----------|-----------|-------------|-------|
+| Heuristic (old) | ~50% | <1s | Keyword matching, many false positives |
+| Agentic (ADK) | 7/7 | 4.7s | Google ADK, text parsing (fragile) |
+| Agentic (LangGraph) | 7/7 | 4.3s | LangGraph + structured output (robust) |
 
-9. **P3**: Add vector embeddings on `sioc:content` for hybrid retrieval
+**Winner: LangGraph** — same precision as ADK, but native structured output (`response_format=WikidataMatch`) eliminates parsing failures. In fair ceteris paribus test, ADK failed 3/7 due to regex parsing of free-text output.
 
-10. **P3**: Expand to other data sources (ChatGPT, Cursor, VS Code Copilot)
+Key capability: **ReAct loop resolves abbreviations and synonyms**:
+- "apis" → searches "application programming interface" → Q165194 ✅
+- "k8s" → searches "kubernetes" → Q22661306 ✅
+- "js" → searches "javascript" → Q2005 ✅
+- "agent" → searches "software agent" → Q2297769 ✅
+
+### Files Created/Modified (Sprint 3)
+
+```
+ontology/devkg.ttl                    # +Project, hasSourceFile, belongsToProject, hasWorkingDirectory
+pipeline/common.py                    # NEW: shared RDF logic (219 lines)
+pipeline/jsonl_to_rdf.py              # Refactored: imports common.py, +hasSourceFile, +Project
+pipeline/deepseek_to_rdf.py           # NEW: DeepSeek parser (370 lines)
+pipeline/grok_to_rdf.py               # NEW: Grok parser (267 lines)
+pipeline/warp_to_rdf.py               # NEW: Warp parser (313 lines)
+pipeline/cursor_to_rdf.py             # NEW: Cursor parser (246 lines) — NOT integrated, see Sprint 4
+pipeline/triple_extraction.py         # +retry logic (MAX_RETRIES=2)
+pipeline/link_entities.py             # Enhanced: SQLite cache, batch mode, aliases
+pipeline/entity_aliases.json          # NEW: 31 tech synonym mappings
+pipeline/batch_extraction.py          # NEW: Gemini batch prediction (252 lines)
+pipeline/sample_queries.sparql        # +Queries 9-14
+pipeline/agentic_linker.py            # NEW: single-shot Gemini linker (prototype)
+pipeline/agentic_linker_adk.py        # NEW: Google ADK ReAct agent (317 lines)
+pipeline/agentic_linker_langgraph.py  # NEW: LangGraph ReAct agent (307 lines) — WINNER
+hooks/post_session_hook.sh            # NEW: automation skeleton
+daemon/sync_daemon.py                 # NEW: watchdog file watcher
+daemon/watermarks.json                # NEW: tracking state
+requirements.txt                      # +qwikidata, google-cloud-storage, watchdog
+output/claude_sample.ttl              # Sprint 3 output
+output/deepseek_sample.ttl            # Sprint 3 output
+output/grok_sample.ttl                # Sprint 3 output
+output/warp_sample.ttl                # Sprint 3 output
+output/wikidata_links.ttl             # Sprint 3 entity links
+```
+
+### How to Run
+
+```bash
+# Start Fuseki
+cd ~/opt/apache-jena-fuseki && ./fuseki-server &
+
+# Run parsers (1 conversation each)
+.venv/bin/python -m pipeline.jsonl_to_rdf <session.jsonl> output/claude_sample.ttl
+.venv/bin/python -m pipeline.deepseek_to_rdf external_knowledge/deepseek_data-2026-01-28.zip output/deepseek_sample.ttl --conversation 0
+.venv/bin/python -m pipeline.grok_to_rdf external_knowledge/grok_data-2026-01-28.zip output/grok_sample.ttl --conversation 0
+.venv/bin/python -m pipeline.warp_to_rdf output/warp_sample.ttl --conversation 0
+
+# Entity linking (batch across all outputs)
+.venv/bin/python -m pipeline.link_entities --input output/*_sample.ttl --output output/wikidata_links.ttl
+
+# Load into Fuseki
+.venv/bin/python pipeline/load_fuseki.py output/*_sample.ttl output/wikidata_links.ttl
+
+# Agentic linker (LangGraph)
+.venv/bin/python pipeline/agentic_linker_langgraph.py
+```
+
+---
+
+## Sprint 4 Results (2026-02-14): Agentic Linker Integration + Bulk Pipeline
+
+### What Was Built
+
+- [x] **P0 DONE**: Integrated LangGraph ReAct agent into `link_entities.py` — replaces heuristic `select_best_match()` with LLM-powered disambiguation. `--heuristic` flag preserved as fallback.
+- [x] **P0 DONE**: Bulk processing script (`pipeline/bulk_process.py`) — finds all `~/.claude/projects/**/*.jsonl`, runs parse+extract+link. SHA256 content hashing for watermarks (skip already-processed). CLI: `--dry-run`, `--limit N`, `--skip-linking`, `--force`.
+- [x] **P1 DONE**: Stopword filter in `triple_extraction.py` — rejects single chars, paths (`/exit`), dimension strings (`1400px`), generic noise (`command name`, `exit`). Applied in `_parse_triples_response()`.
+- [x] **P1 DONE**: Entity deduplication — post-processing in `link_entity_list()`: entities sharing the same Wikidata QID get `owl:sameAs` to each other (e.g., `medication` == `medicamento` via Q12140).
+- [x] **P1 DONE**: Confidence threshold `CONFIDENCE_THRESHOLD = 0.7` — only emits `owl:sameAs` for high-confidence matches. Low-confidence logged to stderr.
+- [x] **Dropped**: Cursor parser deleted (`pipeline/cursor_to_rdf.py`) — unmaintained CLI, low value.
+- [x] **Done**: Warp quality filter — `--min-exchanges N` (default: 5) and `--min-triples N` (default: 1) flags in `warp_to_rdf.py`.
+- [x] **Dependencies**: Added `langchain-google-genai`, `langgraph`, `pydantic` to `requirements.txt`.
+
+### E2E Pipeline Test (13 Sessions)
+
+| Metric | Value |
+|--------|-------|
+| Sessions processed | 13 (8 unique + 5 subagent) |
+| Total RDF triples in Fuseki | 7,181 |
+| Entities | 360 |
+| Knowledge triples | 420 (413 unique) |
+| Wikidata owl:sameAs links | 120 (33% link rate) |
+| Deduplicated entity pairs | 19 |
+| Low-confidence rejected | 4 |
+| Predicates used | 20 of 24 |
+
+### What Worked Well
+
+- Stopword filter correctly rejected non-entities (`/exit`, `1400px+ width`, single letters)
+- Confidence threshold (0.7) filtered noise like `hardcoding token value` → Q631425 (conf=0.60)
+- Entity deduplication caught 19 pairs (e.g., `medication` == `medicamento` via same QID Q12140, `otel` == `opentelemetry` via Q121746046)
+- SHA256 watermarks prevent reprocessing on re-runs
+- Agentic linker resolves abbreviations: `otel` → OpenTelemetry, `npm` → Q7067518
+
+### Known Issues
+
+- **76% knowledge triple duplication** from subagent files sharing parent session content — subagent `.jsonl` files contain overlapping context with their parent session. Needs subagent deduplication logic (skip subagent files, or detect parent session overlap).
+- **`GOOGLE_API_KEY` warning floods stderr** — cosmetic, from `langchain-google-genai` creating fresh model instances per entity. Could suppress with `warnings.filterwarnings`.
+- **33% Wikidata link rate** — many extracted entities are domain-specific (medical terms in Portuguese, internal config paths) that don't exist in Wikidata. Expected for a personal KG.
+
+### Files Created/Modified (Sprint 4)
+
+```
+pipeline/bulk_process.py          # NEW: bulk session processor (watermarks, --dry-run, --limit)
+pipeline/triple_extraction.py     # +STOPWORDS set, +is_valid_entity(), filter in _parse_triples_response()
+pipeline/link_entities.py         # +agentic mode (LangGraph), +confidence threshold, +entity dedup, +--heuristic flag
+pipeline/warp_to_rdf.py           # +--min-exchanges, +--min-triples quality filters
+pipeline/common.py                # Removed Cursor from docstring
+pipeline/cursor_to_rdf.py         # DELETED
+requirements.txt                  # +langchain-google-genai, langgraph, pydantic
+output/claude/*.ttl               # 13 session outputs + wikidata_links.ttl
+output/claude/watermarks.json     # SHA256 hashes for processed sessions
+```
+
+### How to Run
+
+```bash
+# Start Fuseki
+cd ~/opt/apache-jena-fuseki && ./fuseki-server &
+
+# Bulk process (all sessions)
+.venv/bin/python -m pipeline.bulk_process
+
+# Bulk process (limited, dry-run)
+.venv/bin/python -m pipeline.bulk_process --dry-run
+.venv/bin/python -m pipeline.bulk_process --limit 10
+
+# Entity linking only (agentic, default)
+.venv/bin/python -m pipeline.link_entities --input output/claude/*.ttl --output output/claude/wikidata_links.ttl
+
+# Entity linking (heuristic fallback)
+.venv/bin/python -m pipeline.link_entities --heuristic --input output/claude/*.ttl --output output/claude/wikidata_links.ttl
+
+# Load into Fuseki
+.venv/bin/python pipeline/load_fuseki.py output/claude/*.ttl
+
+# Warp with quality filter
+.venv/bin/python -m pipeline.warp_to_rdf output/warp.ttl --conversation 0 --min-exchanges 5
+```
+
+---
+
+## Next Steps (Sprint 5)
+
+1. **P0**: Subagent deduplication — skip subagent `.jsonl` files when parent session is processed (detect `subagents/` in path), or deduplicate knowledge triples at load time
+2. **P0**: Process ALL 1,542 Claude Code sessions (currently only 13 tested)
+3. **P1**: Neo4j migration — import RDF via n10s, enable Cypher queries + vector search
+4. **P1**: Suppress `GOOGLE_API_KEY` warning noise in agentic linker
+5. **P2**: Vector embeddings on `sioc:content` for hybrid retrieval (Neo4j native vector indexes)
+6. **P2**: Evaluate Graphiti for temporal relationship tracking
+7. **P2**: Evaluate LangChain `LLMGraphTransformer` for comparison
+8. **P3**: Graphiti MCP server for Claude Code integration (chat with your KG)
+9. **Conditional**: Warp parser — only run when sessions have bulk content (most are too thin)

@@ -53,6 +53,34 @@ _PREDICATE_SET = set(PREDICATE_VOCABULARY.keys())
 
 
 # =============================================================================
+# Stopword Filter
+# =============================================================================
+
+STOPWORDS = {
+    "command name", "exit", "yes", "no", "ok", "the", "it", "this",
+    "that", "none", "null", "undefined", "true", "false", "n/a",
+}
+
+
+def is_valid_entity(name: str) -> bool:
+    """Return False for entities that are noise rather than real technical concepts."""
+    if not name or len(name) <= 1:
+        return False
+    if name in STOPWORDS:
+        return False
+    # Paths or shell commands
+    if name.startswith("/") or "\\" in name:
+        return False
+    # Dimension strings like "1400px", "800px+ width"
+    if re.match(r"^\d+px", name):
+        return False
+    # Pure numbers
+    if re.match(r"^\d+$", name):
+        return False
+    return True
+
+
+# =============================================================================
 # Prompt Builder
 # =============================================================================
 
@@ -152,6 +180,59 @@ def normalize_triple(triple: dict) -> dict:
 # Extraction
 # =============================================================================
 
+def _parse_triples_response(raw: str) -> list[dict] | None:
+    """Parse raw LLM response text into a list of triple dicts.
+
+    Returns None if parsing fails entirely.
+    """
+    # Try direct JSON parse
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        # Try to find JSON array in response
+        match = re.search(r"\[.*\]", raw, re.DOTALL)
+        if match:
+            try:
+                parsed = json.loads(match.group())
+            except json.JSONDecodeError:
+                return None
+        else:
+            return None
+
+    # Handle dict wrapper (e.g., {"triples": [...]})
+    if isinstance(parsed, dict):
+        for key in parsed:
+            if isinstance(parsed[key], list):
+                parsed = parsed[key]
+                break
+        else:
+            return None
+
+    if not isinstance(parsed, list):
+        return None
+
+    # Validate and normalize
+    triples = []
+    for item in parsed:
+        if not isinstance(item, dict):
+            continue
+        if not all(
+            k in item and isinstance(item[k], str)
+            for k in ("subject", "predicate", "object")
+        ):
+            continue
+        normalized = normalize_triple(item)
+        if (normalized["subject"] and normalized["predicate"] and normalized["object"]
+                and is_valid_entity(normalized["subject"])
+                and is_valid_entity(normalized["object"])):
+            triples.append(normalized)
+
+    return triples
+
+
+MAX_RETRIES = 2
+
+
 def extract_triples_gemini(model, text: str) -> list[dict]:
     """Extract knowledge triples from text using a Gemini model.
 
@@ -165,60 +246,31 @@ def extract_triples_gemini(model, text: str) -> list[dict]:
     if not text or len(text.strip()) < 30:
         return []
 
-    # Truncate to keep extraction focused
-    truncated = text[:1500]
+    max_chars = 1500
 
-    prompt = build_extraction_prompt(truncated)
+    for attempt in range(1 + MAX_RETRIES):
+        truncated = text[:max_chars]
+        prompt = build_extraction_prompt(truncated)
 
-    try:
-        response = model.generate_content(prompt)
-        raw = response.text.strip()
-    except Exception as e:
-        print(f"[triple_extraction] API error: {e}", file=sys.stderr)
-        return []
-
-    # Parse JSON response
-    try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError:
-        # Try to find JSON array in response
-        match = re.search(r"\[.*\]", raw, re.DOTALL)
-        if match:
-            try:
-                parsed = json.loads(match.group())
-            except json.JSONDecodeError:
-                print(f"[triple_extraction] JSON parse failed: {raw[:200]}", file=sys.stderr)
-                return []
-        else:
-            print(f"[triple_extraction] No JSON array in response: {raw[:200]}", file=sys.stderr)
+        try:
+            response = model.generate_content(prompt)
+            raw = response.text.strip()
+        except Exception as e:
+            print(f"[triple_extraction] API error (attempt {attempt + 1}): {e}", file=sys.stderr)
+            if attempt < MAX_RETRIES:
+                max_chars = 1000  # shorter input on retry
+                continue
             return []
 
-    # Handle dict wrapper (e.g., {"triples": [...]})
-    if isinstance(parsed, dict):
-        for key in parsed:
-            if isinstance(parsed[key], list):
-                parsed = parsed[key]
-                break
+        triples = _parse_triples_response(raw)
+        if triples is not None:
+            return triples
+
+        # Parse failed — retry with shorter input
+        if attempt < MAX_RETRIES:
+            print(f"[triple_extraction] JSON parse failed (attempt {attempt + 1}), retrying with shorter input: {raw[:100]}", file=sys.stderr)
+            max_chars = 1000
         else:
-            print(f"[triple_extraction] Unexpected dict structure: {list(parsed.keys())}", file=sys.stderr)
-            return []
+            print(f"[triple_extraction] JSON parse failed after {attempt + 1} attempts: {raw[:200]}", file=sys.stderr)
 
-    if not isinstance(parsed, list):
-        return []
-
-    # Validate and normalize
-    triples = []
-    for item in parsed:
-        if not isinstance(item, dict):
-            continue
-        if not all(
-            k in item and isinstance(item[k], str)
-            for k in ("subject", "predicate", "object")
-        ):
-            continue
-        normalized = normalize_triple(item)
-        # Skip triples with empty fields after normalization
-        if normalized["subject"] and normalized["predicate"] and normalized["object"]:
-            triples.append(normalized)
-
-    return triples
+    return []
