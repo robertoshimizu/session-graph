@@ -1,0 +1,494 @@
+# Dev Knowledge Graph (DevKG)
+
+A unified developer knowledge graph that extracts structured `(subject, predicate, object)` triples from AI-assisted coding sessions across multiple platforms, enabling relationship queries like "how does X relate to Y?" with full provenance tracking.
+
+---
+
+## Table of Contents
+
+- [Project Goal](#project-goal)
+- [Architecture](#architecture)
+- [How to Run](#how-to-run)
+- [Project Structure](#project-structure)
+- [Sprint 1 — Structural Pipeline (2026-02-13)](#sprint-1--structural-pipeline-2026-02-13)
+- [Sprint 2 — Knowledge Triple Extraction (2026-02-14)](#sprint-2--knowledge-triple-extraction-2026-02-14)
+- [Multi-Platform Assessment](#multi-platform-assessment)
+- [Entity Disambiguation Strategy](#entity-disambiguation-strategy)
+- [Ontology Reference](#ontology-reference)
+- [Parking Lot (Sprint 3+)](#parking-lot-sprint-3)
+- [Lessons Learned](#lessons-learned)
+
+---
+
+## Project Goal
+
+Build a unified developer knowledge graph that connects scattered knowledge from:
+- **Claude Code** session logs (`~/.claude/projects/**/*.jsonl`)
+- **Cursor AI** sessions (SQLite at `~/Library/Application Support/Cursor/`)
+- **Warp** terminal AI sessions (SQLite at `~/Library/Group Containers/.../warp.sqlite`)
+- **VS Code Copilot** chat sessions (JSON files in `workspaceStorage/`)
+- **ChatGPT**, **Grok**, **DeepSeek** conversation exports
+
+The system enables **chatting with your entire knowledge base** — self-hosted, private, and model-agnostic.
+
+---
+
+## Architecture
+
+```
+Scattered Sources               Adapter Layer              Knowledge Graph
+-----------------               -------------              ---------------
+Claude Code JSONL  --+
+ChatGPT JSON       --+
+Cursor SQLite      --+-->  Per-platform   -->  Gemini 2.5    -->  Fuseki
+Warp SQLite        --+     parser              Flash             (SPARQL)
+VS Code JSON       --+     (normalize to       (triple            |
+Grok JSON          --+      common schema)      extraction)        |
+DeepSeek JSON      --+                                             v
+                                                          Wikidata/DBpedia
+                                                          (entity linking
+                                                           via owl:sameAs)
+                                                                   |
+                                                                   v
+                                                          Hybrid Retrieval
+                                                      (SPARQL + Vector search)
+```
+
+### Ontology Stack
+
+Five W3C/ISO standards composed, plus a curated DevKG predicate vocabulary:
+
+| Standard | Role | Maturity |
+|---|---|---|
+| **PROV-O** | Provenance: who did what, when, derived from what | W3C Recommendation |
+| **SIOC** | Conversation: messages, threads, containers | W3C Member Submission |
+| **SKOS** | Taxonomy: topics, broader/narrower hierarchies | W3C Recommendation |
+| **Dublin Core** | Metadata: dates, titles, creators | ISO Standard |
+| **Schema.org** | Cherry-pick: `SoftwareSourceCode` | De facto standard |
+| **DevKG** | 24 curated predicates for developer knowledge relationships | Custom OWL |
+
+### Dual Storage Pattern
+
+Every extracted relationship is stored two ways:
+
+1. **Direct edge** — `data:entity/fastapi devkg:uses data:entity/pydantic` (fast traversal)
+2. **Reified KnowledgeTriple** — links back to source message and session (provenance)
+
+This enables both "what does FastAPI use?" (single hop) and "where did we learn FastAPI uses Pydantic?" (provenance join).
+
+---
+
+## How to Run
+
+### Prerequisites
+
+- Python 3.11+ with virtualenv
+- Google Cloud service account with Vertex AI access
+- Apache Jena Fuseki (for SPARQL queries)
+
+### Setup
+
+```bash
+cd /Users/robertoshimizu/GitRepo/Hacks/claude_hacks/dev-knowledge-graph
+
+# Create virtualenv
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+
+# Configure .env with Vertex AI credentials
+# GOOGLE_APPLICATION_CREDENTIALS_BASE64=<base64-encoded-service-account-json>
+# GOOGLE_CLOUD_PROJECT=<your-project-id>
+```
+
+### Run Pipeline
+
+```bash
+# Full extraction (Gemini 2.5 Flash)
+.venv/bin/python -m pipeline.jsonl_to_rdf <input.jsonl> output/<name>.ttl
+
+# Skip extraction (structure only — no API calls)
+.venv/bin/python -m pipeline.jsonl_to_rdf <input.jsonl> output/<name>.ttl --skip-extraction
+
+# Custom model
+.venv/bin/python -m pipeline.jsonl_to_rdf <input.jsonl> output/<name>.ttl --model gemini-2.5-pro
+```
+
+### Load into Fuseki
+
+```bash
+# Start Fuseki
+cd ~/opt/apache-jena-fuseki && ./fuseki-server &
+
+# Load Turtle files
+.venv/bin/python pipeline/load_fuseki.py output/*.ttl
+
+# Query at http://localhost:3030
+```
+
+---
+
+## Project Structure
+
+```
+dev-knowledge-graph/
+├── CLAUDE.md                        # Project instructions for Claude Code
+├── README.md                        # This file
+├── DEVKG_ONTOLOGY.md                # Full ontology reference (classes, predicates, examples)
+├── requirements.txt                 # Python dependencies
+├── .env                             # Vertex AI credentials (not committed)
+│
+├── ontology/
+│   ├── devkg.ttl                    # OWL ontology (398 lines, 24 predicates)
+│   ├── devkg_schema.dot             # Graphviz source
+│   ├── devkg_schema.png             # Schema diagram (PNG)
+│   └── devkg_schema.svg             # Schema diagram (SVG)
+│
+├── pipeline/
+│   ├── vertex_ai.py                 # Vertex AI auth (base64 credentials → temp file)
+│   ├── triple_extraction.py         # Ontologist prompt + Gemini extraction + normalization
+│   ├── jsonl_to_rdf.py              # Claude Code JSONL → RDF Turtle (main pipeline)
+│   ├── link_entities.py             # Wikidata entity linking (prototype)
+│   ├── load_fuseki.py               # Upload Turtle to Fuseki
+│   └── sample_queries.sparql        # 8 SPARQL queries (structural + semantic)
+│
+├── external_knowledge/
+│   ├── deepseek_data-2026-01-28.zip # DeepSeek export (42 conversations)
+│   └── grok_data-2026-01-28.zip     # Grok export (126 conversations)
+│
+├── research/
+│   ├── entity-linking-summary.md    # TL;DR: Wikidata/DBpedia strategy
+│   ├── entity-linking-quickstart.md # 3-step deployment guide
+│   ├── wikidata_entity_linking_research.md
+│   ├── dbpedia-entity-linking-assessment.md
+│   ├── entity_linking_integration_approaches.md
+│   └── entity_linking_comparison_table.md
+│
+├── cognee_eval/                     # Cognee framework evaluation (rejected)
+│   ├── EVALUATION.md
+│   ├── ingest.py
+│   └── evaluate.py
+│
+├── output/
+│   ├── test_triples.ttl             # Sprint 2 output (2,185 triples)
+│   ├── ec11ec1e.ttl                 # Sprint 1 output (research session)
+│   └── ddxplus.ttl                  # Sprint 1 output (medical session)
+│
+└── test/
+    ├── sample_entities.txt          # Entity linking test data
+    ├── quick_test.txt
+    ├── quick_links.ttl              # Validated Wikidata owl:sameAs output
+    └── wikidata_links.ttl
+```
+
+---
+
+## Sprint 1 — Structural Pipeline (2026-02-13)
+
+### What Was Built
+
+- OWL ontology composing PROV-O + SIOC + SKOS + DC + Schema.org
+- rdflib pipeline: JSONL → RDF Turtle → Fuseki → SPARQL
+- 3,006 triples loaded (2 sessions, 78 tool calls, 103 topics)
+- Cognee framework evaluated and rejected
+
+### Critical Failure: Flat Tags Instead of Knowledge Triples
+
+The Ollama prompt extracted flat topic labels `["Prolog", "Symbolic AI"]` stored as independent `mentionsTopic` links. The graph could NOT answer "how does Prolog relate to symbolic reasoning?" — it was a tag cloud, not a knowledge graph.
+
+**Root cause:** The plan specified "extract topics" when it should have specified "extract (subject, predicate, object) triples."
+
+> **A knowledge graph without relationships is just a tag cloud.**
+
+See [Lessons Learned](#lessons-learned) for the full post-mortem.
+
+---
+
+## Sprint 2 — Knowledge Triple Extraction (2026-02-14)
+
+### What Changed
+
+| Aspect | Sprint 1 | Sprint 2 |
+|--------|----------|----------|
+| LLM | Ollama llama3 (local) | Gemini 2.5 Flash (Vertex AI) |
+| Extraction | Flat topic tags | (subject, predicate, object) triples |
+| Predicate vocabulary | None | 24 curated OWL ObjectProperties |
+| Entity model | SKOS Concepts (tags) | devkg:Entity + KnowledgeTriple (reified) |
+| Graph answers | "What topics appeared?" | "How does X relate to Y?" |
+| Verification | Structural queries only | Semantic relationship queries |
+
+### Results
+
+- **2,185 RDF triples** from one session (ec11ec1e)
+- **128 knowledge triples** extracted across 18 predicates
+- **120 distinct entities** with labeled relationships
+- **905 structural triples** (messages, tool calls, threading)
+
+### Predicate Distribution (Top 10)
+
+| Predicate | Count | Example |
+|-----------|-------|---------|
+| `uses` | 25 | cognee → neo4j |
+| `isTypeOf` | 18 | fuseki → triple store |
+| `enables` | 14 | ssh tunnel → sql queries |
+| `provides` | 12 | neo4j → native vector search |
+| `relatedTo` | 10 | (fallback for uncategorized) |
+| `alternativeTo` | 8 | myconnect → ngrok |
+| `solves` | 7 | cloudflare bypass → bot detection |
+| `dependsOn` | 6 | cognee → python |
+| `isPartOf` | 6 | prov-o → devkg ontology |
+| `builtWith` | 5 | cognee → python |
+
+### Sample Semantic Queries That Now Work
+
+**"What relationships exist for tunnel?"**
+→ Returns: tunnel `enables` sql queries, tunnel `uses` ssh, tunnel `solves` firewall traversal — with provenance back to source messages.
+
+**"How does myconnect relate to ngrok?"**
+→ Returns: myconnect `alternativeTo` ngrok, myconnect `composesWith` ngrok — extracted from a specific conversation about tunneling alternatives.
+
+### Known Issues
+
+- ~5% of Gemini responses truncate mid-JSON for long messages (handled gracefully with empty return)
+- `relatedTo` fallback is overused (~10% of triples) — could improve prompt specificity
+- Entity deduplication needed across sessions (see [Entity Disambiguation](#entity-disambiguation-strategy))
+
+---
+
+## Multi-Platform Assessment
+
+All five additional knowledge sources were scanned and assessed for DevKG integration.
+
+### Data Inventory
+
+| Source | Format | Sessions | Messages | Date Range | Status |
+|--------|--------|----------|----------|------------|--------|
+| **Claude Code** | JSONL | ongoing | ongoing | ongoing | ✅ Pipeline built |
+| **DeepSeek** | JSON (zip) | 42 | 270 | Apr–Aug 2025 | ✅ Ready for parser |
+| **Grok** | JSON (MongoDB) | 126 | 888 | Mar 2025–Jan 2026 | ✅ Ready for parser |
+| **Warp** | SQLite (142 MB) | 217 | 11,397 | Jan 2025–Feb 2026 | ✅ Rich data |
+| **Cursor** | SQLite (729 MB) | 985 | 32,355 | – | ⚠️ Complex extraction |
+| **VS Code Copilot** | JSON files | 318 | varies | – Jan 2026 | ✅ Clean format |
+| **ChatGPT** | JSON export | TBD | TBD | TBD | Not yet scanned |
+
+### Platform-Specific Notes
+
+**DeepSeek** — Tree-structured conversations with REQUEST/RESPONSE/THINK fragments. No explicit role field (inferred from fragment type). 10 of 42 conversations are dev-related. MongoDB-style timestamps need UTC normalization.
+
+**Grok** — Clean MongoDB export with explicit `sender: "human" | "assistant"`. 6 model variants (grok-3, grok-4, etc.). No tool call details stored.
+
+**Warp** — Richest surprise. 11,397 AI exchanges in SQLite with conversation IDs, model tracking (Claude 3.5 Sonnet), working directories (`prov:atLocation`), and 1,006 terminal commands linked to AI conversations. AI response text is implied by action selection, not stored as a separate field.
+
+**Cursor** — Largest dataset, most complex extraction. Key-value SQLite blobs (`bubbleId:<composer>:<msg>`). No explicit user/assistant role. Workspace-to-project mapping requires joining with `workspace.json` across 179 workspaces. **Decision: Use `cursor-history` CLI tool (S2thend/cursor-history npm package)** instead of writing a custom SQLite parser.
+
+**VS Code Insiders (Copilot)** — Cleanest format. Individual JSON files per session at `workspaceStorage/<hash>/chatSessions/`. Explicit requester/responder. Bonus: `workspace-chunks.json` has pre-computed code embeddings.
+
+### Ontology Compatibility
+
+The DevKG schema works for all platforms without modification. The core pattern (Session → Messages → Entities → KnowledgeTriples) is universal. Each platform needs only a parser adapter — the RDF output schema is identical.
+
+What varies per platform:
+- **Parser complexity** — from trivial (VS Code JSON) to complex (Cursor SQLite blobs)
+- **Tool call detail** — Claude has full tool_use blocks; Grok has nothing; Warp has action results
+- **Role identification** — explicit in Grok/VS Code, inferred in DeepSeek/Cursor
+
+### Pipeline Architecture (Per Platform)
+
+```
+deepseek_data.zip    → pipeline/deepseek_to_rdf.py  → output/*.ttl ─┐
+grok_data.zip        → pipeline/grok_to_rdf.py      → output/*.ttl  │
+warp.sqlite          → pipeline/warp_to_rdf.py       → output/*.ttl  ├→ Fuseki
+cursor (via CLI)     → pipeline/cursor_to_rdf.py     → output/*.ttl  │  (merged)
+vscode chatSessions  → pipeline/vscode_to_rdf.py     → output/*.ttl  │
+claude code JSONL    → pipeline/jsonl_to_rdf.py      → output/*.ttl ─┘
+```
+
+All Turtle files load into the same Fuseki dataset. Entities merge by label. Cross-platform queries work immediately.
+
+---
+
+## Entity Disambiguation Strategy
+
+### The Problem
+
+Same entity gets different names across platforms:
+- `"VS Code"` vs `"Visual Studio Code"` vs `"vscode"` → three URIs
+- `"k8s"` vs `"Kubernetes"` → two URIs
+- `"Apollo"` → GraphQL client? Space program?
+
+### Recommended Solution: Hybrid LLM + Wikidata
+
+```
+Extracted entity "vs code"
+    ↓
+Step 1: LLM canonicalizes → "Visual Studio Code"  (Gemini)
+    ↓
+Step 2: Wikidata API lookup → Q1136656             (wbsearchentities)
+    ↓
+Step 3: If ambiguous, LLM disambiguates with context
+    ↓
+Step 4: Store owl:sameAs link
+```
+
+**RDF output:**
+```turtle
+data:entity/visual-studio-code owl:sameAs <http://www.wikidata.org/entity/Q1136656> .
+data:entity/devkg-ontology a devkg:Entity ;
+    rdfs:label "devkg ontology" .  # No Wikidata match — stays local
+```
+
+### Coverage Assessment
+
+| Entity | Wikidata | DBpedia |
+|--------|----------|---------|
+| Neo4j | ✅ Q1628290 | ✅ |
+| Kubernetes | ✅ | ✅ |
+| Visual Studio Code | ✅ Q1136656 | ✅ |
+| FastAPI | ✅ | ❌ too new |
+| Docker | ⚠️ wrong match | ✅ |
+| Supabase | ✅ | ❌ too new |
+
+**Wikidata coverage: ~88%** for mainstream dev tools. DBpedia lags on post-2020 tools. ~30-40% of entities will be project-specific (no external match) — these stay as local entities with no knowledge lost.
+
+### Why Not LLM-Only QIDs?
+
+LLMs hallucinate Wikidata Q-numbers. QIDs are opaque identifiers — LLMs can't reliably generate `Q1628290` for Neo4j. The hybrid approach uses the LLM for what it's good at (canonicalization, context-aware disambiguation) and the API for what it's good at (authoritative identifiers).
+
+### Research Documents
+
+Full research in `research/`:
+- `entity-linking-summary.md` — TL;DR
+- `entity_linking_integration_approaches.md` — 4 approaches compared
+- `wikidata_entity_linking_research.md` — Wikidata API details
+- `dbpedia-entity-linking-assessment.md` — DBpedia Spotlight evaluation
+
+---
+
+## Ontology Reference
+
+See **[DEVKG_ONTOLOGY.md](DEVKG_ONTOLOGY.md)** for the full reference including:
+- 12 classes (Structural + Knowledge layers)
+- 24 curated predicates with examples
+- Reification pattern (dual storage)
+- T-BOX Turtle examples
+- SPARQL query patterns
+
+Visual schema: **[ontology/devkg_schema.png](ontology/devkg_schema.png)**
+
+### Quick Reference
+
+```
+                    prov:Activity
+                         |
+                   devkg:Session ──── sioc:Forum
+                    /    |    \
+                   /     |     \
+        devkg:Message  ToolCall  CodeArtifact
+           /    \        |
+     UserMsg  AssistantMsg
+                  |
+              invokedTool ──> ToolCall ──hasToolResult──> ToolResult
+
+        prov:Agent
+         /      \
+   Developer   AIModel
+
+        devkg:Entity ──24 predicates──> devkg:Entity
+                                            |
+                                    devkg:KnowledgeTriple
+                                    (reified provenance)
+```
+
+---
+
+## Parking Lot (Sprint 3+)
+
+| # | Item | Description |
+|---|------|-------------|
+| 1 | **`devkg:hasSourceFile`** | Link sessions to their raw source file path (JSONL, SQLite, JSON) |
+| 2 | **`devkg:Project`** | New class linking sessions to project context. Enables "what topics span multiple projects?" |
+| 3 | **Cursor extraction via `cursor-history`** | Use S2thend/cursor-history npm package (JSON export, handles workspace mapping, role inference, schema versions) instead of custom SQLite parser |
+| 4 | **Claude Code post-session hook** | Auto-trigger pipeline ingestion when a session ends |
+| 5 | **Sync daemon** | Periodic ingestion for Cursor/Warp/VS Code with watermark-based dedup (cron/launchd) |
+| 6 | **Wikidata entity linking** | Hybrid approach: LLM canonicalizes → Wikidata API confirms → `owl:sameAs` triples. ~200-300 lines. Prototype at `pipeline/link_entities.py` |
+| 7 | **Per-platform parsers** | `deepseek_to_rdf.py`, `grok_to_rdf.py`, `warp_to_rdf.py`, `cursor_to_rdf.py`, `vscode_to_rdf.py` |
+| 8 | **Retry logic for Gemini truncation** | ~5% of responses truncate mid-JSON. Add retry with shorter text on failure |
+| 9 | **Neo4j migration** | Evaluate Neo4j as primary store for better graph traversal + hybrid retrieval (Cypher + vector) |
+| 10 | **Vector embeddings** | Add embeddings on `sioc:content` for fuzzy/semantic search alongside SPARQL |
+
+---
+
+## Lessons Learned
+
+### Sprint 1 — What Went Wrong
+
+#### 1. Flat Tags Instead of Knowledge Triples (CRITICAL)
+
+The Ollama prompt asked "extract topic strings" and got flat labels `["Prolog", "Symbolic AI"]`. These were stored as independent `mentionsTopic` links. The graph could NOT answer relationship questions.
+
+**What the graph stored:**
+```turtle
+data:msg-552  devkg:mentionsTopic  data:topic/prolog .
+data:msg-552  devkg:mentionsTopic  data:topic/symbolic-ai .
+```
+
+**What it should have stored:**
+```turtle
+data:prolog  devkg:enables      data:symbolic-reasoning .
+data:prolog  devkg:servesAs     data:knowledge-oracle .
+data:llm     devkg:composesWith data:prolog .
+```
+
+**Root cause:** The plan specified "extract topics" when it should have specified "extract (subject, predicate, object) triples." This is the fundamental difference between tagging and knowledge graph construction.
+
+**Fix:** Sprint 2 replaced flat extraction with Gemini-powered triple extraction using a curated 24-predicate vocabulary. The graph now answers "how does Prolog relate to symbolic reasoning?" → `enables`.
+
+#### 2. Cognee Is Validation-Only, Not Schema-Guided
+
+Cognee's custom ontology support post-hoc validates extracted entities against ontology classes — it doesn't guide extraction. Our ontology defines `devkg:Session` and `devkg:ToolCall` but Cognee's LLM extracts "person", "method", "package." The ontology is a filter, not a guide.
+
+**Lesson:** If you need schema-guided extraction, put the schema in the LLM prompt itself (like we did in Sprint 2 with the predicate vocabulary).
+
+#### 3. Ollama Topic Extraction Quality Is Noisy
+
+Bad topics extracted: `"Wider canvas"`, `"Simplified bottom text"`, `"Math.log(p)"`. LLM-based extraction needs better prompting (exclude UI instructions), post-processing (normalize, deduplicate), and a controlled vocabulary.
+
+**Fix:** Sprint 2's few-shot prompt includes an explicit example returning `[]` for formatting-only messages, dramatically reducing noise.
+
+#### 4. Agent Delegation Without Verification Criteria
+
+Agents produced working code that loaded into Fuseki — and success was declared without running semantic verification queries. "It loads" ≠ "it answers questions."
+
+**Lesson:** Every task needs acceptance criteria expressed as questions the graph must answer, not just "create a script."
+
+### Sprint 1 — What Went Right
+
+1. **Ontology composition works** — PROV-O + SIOC + SKOS compose cleanly
+2. **rdflib + Fuseki pipeline is solid** — deterministic, standard RDF, SPARQL queryable
+3. **JSONL parsing is correct** — threading, tool calls, session metadata all map properly
+
+### Sprint 2 — What Went Right
+
+1. **Curated predicate vocabulary is the crux** — 24 OWL ObjectProperties with definitions, examples, and normalization. No existing ontology (SKOS, Schema.org, DOAP, SWO) covers developer knowledge relationships like `enables`, `configures`, `deployedOn`. The custom vocabulary was the right call.
+2. **Few-shot ontologist prompt works** — Gemini 2.5 Flash produces high-quality triples with the right examples. The `[]` example for formatting messages eliminates most noise.
+3. **Dual storage pattern (direct edges + reified triples)** — enables both fast traversal and provenance queries without compromise.
+4. **Normalization pipeline catches LLM drift** — entity normalization (lowercase, strip, collapse spaces) and predicate normalization (camelCase conversion, case-insensitive matching, `relatedTo` fallback) handle most LLM output variation.
+5. **The schema is platform-agnostic** — validated against 5 additional platforms (DeepSeek, Grok, Warp, Cursor, VS Code). The ontology works for all without modification.
+
+### Sprint 2 — What Needs Improvement
+
+1. **Entity deduplication** — "VS Code" and "Visual Studio Code" create separate entities. Wikidata/DBpedia linking (parking lot #6) will fix this.
+2. **`relatedTo` overuse** — ~10% of triples fall back to the generic predicate. Could add more domain-specific predicates or improve prompt guidance.
+3. **No project context** — sessions lack project association. Parking lot #2.
+4. **Single-session tested** — only one session (ec11ec1e) has been fully extracted. Need to run on all sessions before declaring the pipeline production-ready.
+
+### Key Principles
+
+> **A knowledge graph without relationships is just a tag cloud.**
+> The minimum viable extraction unit is `(subject, predicate, object)`, not `[topic1, topic2, topic3]`.
+
+> **Put the schema in the prompt, not in post-processing.**
+> If you want the LLM to use specific predicates, give it the vocabulary explicitly with examples. Don't hope it guesses right and filter later.
+
+> **"It loads" ≠ "it answers questions."**
+> Always verify with semantic queries (Query 6, 7, 8) — not just structural ones (Query 1-5).

@@ -1,0 +1,64 @@
+@prefix dcterms: <http://purl.org/dc/terms/> .
+@prefix devkg: <http://devkg.local/> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+devkg:Anthropic rdfs:label "Anthropic"@en ;
+    dcterms:description "Entity not found in Wikidata"@en .
+
+devkg:Apache_Jena rdfs:label "Apache Jena"@en ;
+    dcterms:description "Entity not found in Wikidata"@en .
+
+devkg:Claude rdfs:label "Claude"@en ;
+    dcterms:description "Entity not found in Wikidata"@en .
+
+devkg:Docker rdfs:label "Docker"@en ;
+    dcterms:description "Entity not found in Wikidata"@en .
+
+devkg:FastAPI rdfs:label "FastAPI"@en ;
+    dcterms:description "Entity not found in Wikidata"@en .
+
+devkg:Fuseki rdfs:label "Fuseki"@en ;
+    dcterms:description "Entity not found in Wikidata"@en .
+
+devkg:Kubernetes rdfs:label "Kubernetes"@en ;
+    dcterms:description "Entity not found in Wikidata"@en .
+
+devkg:LangChain rdfs:label "LangChain"@en ;
+    dcterms:description "Entity not found in Wikidata"@en .
+
+devkg:Neo4j rdfs:label "Neo4j"@en ;
+    dcterms:description "Entity not found in Wikidata"@en .
+
+devkg:OpenAI rdfs:label "OpenAI"@en ;
+    dcterms:description "Entity not found in Wikidata"@en .
+
+devkg:PostgreSQL rdfs:label "PostgreSQL"@en ;
+    dcterms:description "Entity not found in Wikidata"@en .
+
+devkg:Pydantic rdfs:label "Pydantic"@en ;
+    dcterms:description "Entity not found in Wikidata"@en .
+
+devkg:Python rdfs:label "Python"@en ;
+    dcterms:description "Entity not found in Wikidata"@en .
+
+devkg:React rdfs:label "React"@en ;
+    dcterms:description "Entity not found in Wikidata"@en .
+
+devkg:Redis rdfs:label "Redis"@en ;
+    dcterms:description "Entity not found in Wikidata"@en .
+
+devkg:SPARQL rdfs:label "SPARQL"@en ;
+    dcterms:description "Entity not found in Wikidata"@en .
+
+devkg:Supabase rdfs:label "Supabase"@en ;
+    dcterms:description "Entity not found in Wikidata"@en .
+
+devkg:TypeScript rdfs:label "TypeScript"@en ;
+    dcterms:description "Entity not found in Wikidata"@en .
+
+devkg:VS_Code rdfs:label "VS Code"@en ;
+    dcterms:description "Entity not found in Wikidata"@en .
+
+devkg:Visual_Studio_Code rdfs:label "Visual Studio Code"@en ;
+    dcterms:description "Entity not found in Wikidata"@en .
+

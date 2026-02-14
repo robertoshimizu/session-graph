@@ -1,0 +1,128 @@
+# Sample SPARQL queries for the DevKG dataset
+# Run against Fuseki endpoint: http://localhost:3030/devkg/sparql
+
+PREFIX rdf:     <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+PREFIX rdfs:    <http://www.w3.org/2000/01/rdf-schema#>
+PREFIX prov:    <http://www.w3.org/ns/prov#>
+PREFIX sioc:    <http://rdfs.org/sioc/ns#>
+PREFIX skos:    <http://www.w3.org/2004/02/skos/core#>
+PREFIX dcterms: <http://purl.org/dc/terms/>
+PREFIX devkg:   <http://devkg.local/ontology#>
+PREFIX data:    <http://devkg.local/data/>
+
+# =============================================================================
+# Query 1: List all sessions with timestamps and platform
+# =============================================================================
+# SELECT ?session ?platform ?created ?modified
+# WHERE {
+#   ?session rdf:type devkg:Session .
+#   OPTIONAL { ?session devkg:hasSourcePlatform ?platform }
+#   OPTIONAL { ?session dcterms:created ?created }
+#   OPTIONAL { ?session dcterms:modified ?modified }
+# }
+# ORDER BY ?created
+
+# =============================================================================
+# Query 2: Find all tool calls in a session with their names
+# =============================================================================
+# SELECT ?toolCall ?toolName ?timestamp
+# WHERE {
+#   ?toolCall rdf:type devkg:ToolCall ;
+#             devkg:usedInSession ?session ;
+#             devkg:hasToolName ?toolName .
+#   OPTIONAL { ?toolCall dcterms:created ?timestamp }
+# }
+# ORDER BY ?timestamp
+
+# =============================================================================
+# Query 3: What topics were discussed (SKOS concepts) and how often
+# =============================================================================
+# SELECT ?topicLabel (COUNT(?msg) AS ?mentions)
+# WHERE {
+#   ?msg devkg:mentionsTopic ?topic .
+#   ?topic skos:prefLabel ?topicLabel .
+# }
+# GROUP BY ?topicLabel
+# ORDER BY DESC(?mentions)
+
+# =============================================================================
+# Query 4: Show conversation thread for a session (messages in order)
+# =============================================================================
+# SELECT ?msg ?type ?created ?contentSnippet
+# WHERE {
+#   ?msg devkg:usedInSession ?session ;
+#        dcterms:created ?created .
+#   ?msg rdf:type ?type .
+#   FILTER(?type IN (devkg:UserMessage, devkg:AssistantMessage))
+#   OPTIONAL {
+#     ?msg sioc:content ?content .
+#     BIND(SUBSTR(?content, 1, 100) AS ?contentSnippet)
+#   }
+# }
+# ORDER BY ?created
+
+# =============================================================================
+# Query 5: What tool names were used and how often
+# =============================================================================
+# SELECT ?toolName (COUNT(?toolCall) AS ?count)
+# WHERE {
+#   ?toolCall rdf:type devkg:ToolCall ;
+#             devkg:hasToolName ?toolName .
+# }
+# GROUP BY ?toolName
+# ORDER BY DESC(?count)
+
+# =============================================================================
+# Query 6: What relationships exist for a given entity?
+# =============================================================================
+# SELECT ?predicate ?objectLabel ?sourceSnippet
+# WHERE {
+#   ?triple rdf:type devkg:KnowledgeTriple ;
+#           devkg:tripleSubject ?subject ;
+#           devkg:triplePredicateLabel ?predicate ;
+#           devkg:tripleObject ?object ;
+#           devkg:extractedFrom ?sourceMsg .
+#   ?subject rdfs:label ?subjectLabel .
+#   ?object rdfs:label ?objectLabel .
+#   OPTIONAL {
+#     ?sourceMsg sioc:content ?content .
+#     BIND(SUBSTR(?content, 1, 120) AS ?sourceSnippet)
+#   }
+#   FILTER(LCASE(?subjectLabel) = "prolog")
+# }
+# ORDER BY ?predicate
+
+# =============================================================================
+# Query 7: How does entity X relate to entity Y? (with provenance)
+# =============================================================================
+# SELECT ?predicate ?sourceSnippet
+# WHERE {
+#   ?triple rdf:type devkg:KnowledgeTriple ;
+#           devkg:tripleSubject ?subject ;
+#           devkg:triplePredicateLabel ?predicate ;
+#           devkg:tripleObject ?object ;
+#           devkg:extractedFrom ?msg .
+#   ?subject rdfs:label ?subjectLabel .
+#   ?object rdfs:label ?objectLabel .
+#   OPTIONAL {
+#     ?msg sioc:content ?content .
+#     BIND(SUBSTR(?content, 1, 120) AS ?sourceSnippet)
+#   }
+#   FILTER(LCASE(?subjectLabel) = "prolog" && LCASE(?objectLabel) = "symbolic reasoning")
+# }
+
+# =============================================================================
+# Query 8: Entity co-occurrence — which entity pairs appear together most?
+# =============================================================================
+# SELECT ?label1 ?label2 (COUNT(DISTINCT ?triple) AS ?cooccurrences)
+# WHERE {
+#   ?triple rdf:type devkg:KnowledgeTriple ;
+#           devkg:tripleSubject ?e1 ;
+#           devkg:tripleObject ?e2 .
+#   ?e1 rdfs:label ?label1 .
+#   ?e2 rdfs:label ?label2 .
+#   FILTER(?e1 != ?e2)
+# }
+# GROUP BY ?label1 ?label2
+# ORDER BY DESC(?cooccurrences)
+# LIMIT 20

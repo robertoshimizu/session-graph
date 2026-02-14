@@ -1,0 +1,19 @@
+# Environment and secrets
+.env
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store
+
+# Claude Code local settings
+.claude/
+
+# Generated outputs (regenerable via pipeline)
+output/
+
+# Binary data exports
+external_knowledge/

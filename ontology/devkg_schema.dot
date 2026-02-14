@@ -1,0 +1,272 @@
+digraph DevKG_Ontology {
+    // Global settings
+    rankdir=TB;
+    fontname="Helvetica";
+    fontsize=16;
+    label=<<B>Dev Knowledge Graph Ontology (devkg.ttl)</B>>;
+    labelloc=t;
+    labeljust=c;
+    pad=0.5;
+    nodesep=0.8;
+    ranksep=1.2;
+    splines=true;
+
+    // Default node style
+    node [
+        fontname="Helvetica",
+        fontsize=11,
+        style="filled,rounded",
+        shape=box,
+        penwidth=1.5
+    ];
+
+    // Default edge style
+    edge [
+        fontname="Helvetica",
+        fontsize=9,
+        penwidth=1.2,
+        color="black"
+    ];
+
+    // =========================================================================
+    // BLUE Structural Classes (#4A90D9)
+    // =========================================================================
+
+    Developer [
+        label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="2">
+            <TR><TD><B>Developer</B></TD></TR>
+            <TR><TD><FONT POINT-SIZE="8" COLOR="#E0E8F0">prov:Agent</FONT></TD></TR>
+        </TABLE>>,
+        fillcolor="#4A90D9", fontcolor="white", color="#2E6DB4"
+    ];
+
+    AIModel [
+        label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="2">
+            <TR><TD><B>AIModel</B></TD></TR>
+            <TR><TD><FONT POINT-SIZE="8" COLOR="#E0E8F0">prov:Agent</FONT></TD></TR>
+        </TABLE>>,
+        fillcolor="#4A90D9", fontcolor="white", color="#2E6DB4"
+    ];
+
+    Session [
+        label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="2">
+            <TR><TD><B>Session</B></TD></TR>
+            <TR><TD><FONT POINT-SIZE="8" COLOR="#E0E8F0">prov:Activity, sioc:Forum</FONT></TD></TR>
+        </TABLE>>,
+        fillcolor="#4A90D9", fontcolor="white", color="#2E6DB4"
+    ];
+
+    Message [
+        label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="2">
+            <TR><TD><B>Message</B></TD></TR>
+            <TR><TD><FONT POINT-SIZE="8" COLOR="#E0E8F0">sioc:Post, prov:Entity</FONT></TD></TR>
+        </TABLE>>,
+        fillcolor="#4A90D9", fontcolor="white", color="#2E6DB4"
+    ];
+
+    UserMessage [
+        label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="2">
+            <TR><TD><B>UserMessage</B></TD></TR>
+            <TR><TD><FONT POINT-SIZE="8" COLOR="#E0E8F0">devkg:Message</FONT></TD></TR>
+        </TABLE>>,
+        fillcolor="#4A90D9", fontcolor="white", color="#2E6DB4"
+    ];
+
+    AssistantMessage [
+        label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="2">
+            <TR><TD><B>AssistantMessage</B></TD></TR>
+            <TR><TD><FONT POINT-SIZE="8" COLOR="#E0E8F0">devkg:Message</FONT></TD></TR>
+        </TABLE>>,
+        fillcolor="#4A90D9", fontcolor="white", color="#2E6DB4"
+    ];
+
+    ToolCall [
+        label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="2">
+            <TR><TD><B>ToolCall</B></TD></TR>
+            <TR><TD><FONT POINT-SIZE="8" COLOR="#E0E8F0">prov:Activity</FONT></TD></TR>
+        </TABLE>>,
+        fillcolor="#4A90D9", fontcolor="white", color="#2E6DB4"
+    ];
+
+    ToolResult [
+        label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="2">
+            <TR><TD><B>ToolResult</B></TD></TR>
+            <TR><TD><FONT POINT-SIZE="8" COLOR="#E0E8F0">prov:Entity</FONT></TD></TR>
+        </TABLE>>,
+        fillcolor="#4A90D9", fontcolor="white", color="#2E6DB4"
+    ];
+
+    CodeArtifact [
+        label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="2">
+            <TR><TD><B>CodeArtifact</B></TD></TR>
+            <TR><TD><FONT POINT-SIZE="8" COLOR="#E0E8F0">prov:Entity, schema:SoftwareSourceCode</FONT></TD></TR>
+        </TABLE>>,
+        fillcolor="#4A90D9", fontcolor="white", color="#2E6DB4"
+    ];
+
+    Topic [
+        label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="2">
+            <TR><TD><B>Topic</B></TD></TR>
+            <TR><TD><FONT POINT-SIZE="8" COLOR="#E0E8F0">skos:Concept</FONT></TD></TR>
+        </TABLE>>,
+        fillcolor="#4A90D9", fontcolor="white", color="#2E6DB4"
+    ];
+
+    // =========================================================================
+    // GREEN Sprint 2 Classes (#5CB85C)
+    // =========================================================================
+
+    Entity [
+        label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="2">
+            <TR><TD><B>Entity</B></TD></TR>
+            <TR><TD><FONT POINT-SIZE="8" COLOR="#D5F0D5">prov:Entity</FONT></TD></TR>
+        </TABLE>>,
+        fillcolor="#5CB85C", fontcolor="white", color="#449D44"
+    ];
+
+    KnowledgeTriple [
+        label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="2">
+            <TR><TD><B>KnowledgeTriple</B></TD></TR>
+            <TR><TD><FONT POINT-SIZE="8" COLOR="#D5F0D5">reified triple node</FONT></TD></TR>
+        </TABLE>>,
+        fillcolor="#5CB85C", fontcolor="white", color="#449D44"
+    ];
+
+    // =========================================================================
+    // Layout: ranks
+    // =========================================================================
+
+    { rank=same; Developer; Session; AIModel; }
+    { rank=same; Message; Topic; }
+    { rank=same; UserMessage; AssistantMessage; Entity; KnowledgeTriple; }
+    { rank=same; ToolCall; ToolResult; CodeArtifact; }
+
+    // =========================================================================
+    // Structural edges
+    // =========================================================================
+
+    // Agents to Session
+    Developer -> Session [label="prov:wasAssociatedWith"];
+    AIModel -> Session [label="prov:wasAssociatedWith"];
+
+    // Session to Message (has_container inverted for top-down flow)
+    Session -> Message [label="has_container\n(sioc)", dir=back];
+
+    // Message to subtypes
+    Message -> UserMessage [label="rdfs:subClassOf", style=dashed, color="#888888", arrowhead=empty];
+    Message -> AssistantMessage [label="rdfs:subClassOf", style=dashed, color="#888888", arrowhead=empty];
+
+    // Message self-reference
+    Message -> Message [label="hasParentMessage\n(sioc:reply_of)", constraint=false, style=bold];
+
+    // Message to Topic
+    Message -> Topic [label="mentionsTopic"];
+
+    // has_creator
+    UserMessage -> Developer [label="has_creator (sioc)", constraint=false, style=dashed, color="#4A90D9"];
+    AssistantMessage -> AIModel [label="has_creator (sioc)", constraint=false, style=dashed, color="#4A90D9"];
+
+    // usedInSession (Message already connected via has_container)
+
+    // Tool interactions
+    AssistantMessage -> ToolCall [label="invokedTool"];
+    ToolCall -> ToolResult [label="hasToolResult"];
+
+    // Artifact production
+    Session -> CodeArtifact [label="producedArtifact\n(prov:generated)"];
+    ToolCall -> CodeArtifact [label="producedArtifact", constraint=false, style=dashed];
+
+    // =========================================================================
+    // Reification edges (green, Sprint 2)
+    // =========================================================================
+
+    KnowledgeTriple -> Entity [label="tripleSubject", color="#449D44", fontcolor="#449D44"];
+    KnowledgeTriple -> Entity [label="tripleObject", color="#449D44", fontcolor="#449D44", style=dashed];
+    KnowledgeTriple -> Message [label="extractedFrom", color="#449D44", fontcolor="#449D44"];
+    KnowledgeTriple -> Session [label="extractedInSession", color="#449D44", fontcolor="#449D44", constraint=false];
+
+    // =========================================================================
+    // Predicate Vocabulary (cluster box)
+    // =========================================================================
+
+    subgraph cluster_predicates {
+        label=<<B>Curated Predicate Vocabulary</B><BR/><FONT POINT-SIZE="9" COLOR="#555555">Entity &#8212;[predicate]&#8594; Entity</FONT>>;
+        labeljust=c;
+        style="rounded,bold";
+        color="#449D44";
+        penwidth=2.5;
+        bgcolor="#F5FBF5";
+        fontname="Helvetica";
+        fontsize=12;
+
+        PredicateList [
+            shape=plaintext,
+            label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="5" COLOR="#449D44">
+                <TR>
+                    <TD COLSPAN="3" BGCOLOR="#5CB85C"><FONT COLOR="white"><B>24 Knowledge Predicates</B></FONT></TD>
+                </TR>
+                <TR>
+                    <TD BGCOLOR="#E8F5E8"><B>Dependency &amp; Usage</B></TD>
+                    <TD BGCOLOR="#E8F5E8"><B>Composition &amp; Structure</B></TD>
+                    <TD BGCOLOR="#E8F5E8"><B>Infrastructure</B></TD>
+                </TR>
+                <TR>
+                    <TD ALIGN="LEFT" VALIGN="TOP">
+                        uses<BR/>
+                        dependsOn<BR/>
+                        requires<BR/>
+                        enables<BR/>
+                        implements<BR/>
+                        extends<BR/>
+                        builtWith
+                    </TD>
+                    <TD ALIGN="LEFT" VALIGN="TOP">
+                        <FONT COLOR="#C0392B"><B>isPartOf</B>  (dcterms)</FONT><BR/>
+                        <FONT COLOR="#C0392B"><B>hasPart</B>  (dcterms)</FONT><BR/>
+                        composesWith<BR/>
+                        isTypeOf<BR/>
+                        alternativeTo<BR/>
+                        servesAs
+                    </TD>
+                    <TD ALIGN="LEFT" VALIGN="TOP">
+                        deployedOn<BR/>
+                        storesIn<BR/>
+                        queriedWith<BR/>
+                        integratesWith<BR/>
+                        configures
+                    </TD>
+                </TR>
+                <TR>
+                    <TD BGCOLOR="#E8F5E8"><B>Capability</B></TD>
+                    <TD BGCOLOR="#E8F5E8" COLSPAN="2"><B>Taxonomy  (SKOS-mapped)</B></TD>
+                </TR>
+                <TR>
+                    <TD ALIGN="LEFT" VALIGN="TOP">
+                        solves<BR/>
+                        produces<BR/>
+                        provides
+                    </TD>
+                    <TD ALIGN="LEFT" VALIGN="TOP" COLSPAN="2">
+                        <FONT COLOR="#C0392B"><B>broader</B>  (skos:broader)</FONT><BR/>
+                        <FONT COLOR="#C0392B"><B>narrower</B>  (skos:narrower)</FONT><BR/>
+                        <FONT COLOR="#C0392B"><B>relatedTo</B>  (skos:related)</FONT>
+                    </TD>
+                </TR>
+                <TR>
+                    <TD COLSPAN="3" BGCOLOR="#FFF3CD"><FONT POINT-SIZE="8" COLOR="#856404"><B>Red bold</B> = maps to W3C standard (dcterms / skos)</FONT></TD>
+                </TR>
+            </TABLE>>
+        ];
+    }
+
+    // Connect Entity to predicate cluster
+    Entity -> PredicateList [
+        label="domain &amp; range",
+        style=dashed,
+        color="#449D44",
+        fontcolor="#449D44",
+        arrowhead=none,
+        lhead=cluster_predicates,
+        constraint=true
+    ];
+}

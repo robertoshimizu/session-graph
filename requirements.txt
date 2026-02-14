@@ -1,0 +1,6 @@
+# Dev Knowledge Graph dependencies
+rdflib>=7.0.0
+requests>=2.31.0
+google-cloud-aiplatform>=1.74.0
+google-auth>=2.27.0
+python-dotenv>=1.0.0

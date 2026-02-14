@@ -1,0 +1,18 @@
+@prefix dcterms: <http://purl.org/dc/terms/> .
+@prefix devkg: <http://devkg.local/> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix wd: <http://www.wikidata.org/entity/> .
+
+devkg:Neo4j rdfs:label "Neo4j"@en ;
+    dcterms:description "graph database management system implemented in Java"@en ;
+    owl:sameAs wd:Q1628290 .
+
+devkg:Python rdfs:label "Python"@en ;
+    dcterms:description "general-purpose programming language"@en ;
+    owl:sameAs wd:Q28865 .
+
+devkg:React rdfs:label "React"@en ;
+    dcterms:description "JavaScript library for building user interfaces"@en ;
+    owl:sameAs wd:Q19399674 .
+
