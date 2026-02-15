@@ -1,12 +1,12 @@
 """
-Vertex AI authentication for Gemini models.
+Vertex AI authentication for Gemini and Claude models.
 
 Usage:
-    from pipeline.vertex_ai import init_vertex, get_gemini_model
+    from pipeline.vertex_ai import init_vertex, get_gemini_model, get_claude_model
 
     credentials = init_vertex()
-    model = get_gemini_model()
-    response = model.generate_content("Extract triples from ...")
+    model = get_gemini_model()                          # Gemini
+    model = get_claude_model("claude-haiku-4-5-v2")     # Claude via Vertex AI
 """
 
 import os
@@ -69,10 +69,18 @@ def init_vertex() -> service_account.Credentials:
     return credentials
 
 
+_GLOBAL_ONLY_MODELS = {"gemini-3-flash-preview", "gemini-3-pro-preview"}
+
+
 def get_gemini_model(model_name: str | None = None) -> GenerativeModel:
     """Return a GenerativeModel configured for JSON output."""
     if model_name is None:
         model_name = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+
+    # Some models (e.g. gemini-3-flash-preview) require global endpoint
+    if model_name in _GLOBAL_ONLY_MODELS:
+        vertexai.init(location="global")
+        print(f"  Re-initialized Vertex AI with location=global for {model_name}", file=sys.stderr)
 
     config = GenerationConfig(
         response_mime_type="application/json",
@@ -81,3 +89,67 @@ def get_gemini_model(model_name: str | None = None) -> GenerativeModel:
     )
 
     return GenerativeModel(model_name, generation_config=config)
+
+
+# Cache project/location from init_vertex for Claude client
+_vertex_project: str | None = None
+_vertex_location: str | None = None
+
+
+def get_claude_model(model_name: str = "claude-haiku-4-5@20251001"):
+    """Return an AnthropicVertex client + model name tuple for Claude on Vertex AI.
+
+    Returns a wrapper object with a generate_content() method matching the Gemini
+    interface so triple_extraction.py can use it transparently.
+
+    Note: Claude on Vertex AI requires us-east5 region, regardless of VERTEX_AI_LOCATION.
+    """
+    from anthropic import AnthropicVertex
+
+    global _vertex_project
+    if _vertex_project is None:
+        project = os.environ.get("GOOGLE_CLOUD_PROJECT")
+        if not project:
+            b64 = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS_BASE64", "")
+            if b64:
+                try:
+                    project = json.loads(base64.b64decode(b64).decode()).get("project_id")
+                except Exception:
+                    pass
+        _vertex_project = project
+
+    # Claude on Vertex AI is only available in us-east5
+    claude_region = os.environ.get("CLAUDE_VERTEX_REGION", "us-east5")
+
+    client = AnthropicVertex(project_id=_vertex_project, region=claude_region)
+    print(f"  Claude model: {model_name} (project={_vertex_project}, region={claude_region})", file=sys.stderr)
+
+    return ClaudeModelWrapper(client, model_name)
+
+
+class ClaudeModelWrapper:
+    """Wraps AnthropicVertex to match Gemini's generate_content() interface."""
+
+    def __init__(self, client, model_name: str):
+        self._client = client
+        self._model_name = model_name
+
+    def generate_content(self, prompt: str):
+        response = self._client.messages.create(
+            model=self._model_name,
+            max_tokens=8192,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.2,
+        )
+        return ClaudeResponse(response)
+
+
+class ClaudeResponse:
+    """Wraps Anthropic response to expose .text like Gemini."""
+
+    def __init__(self, response):
+        self._response = response
+
+    @property
+    def text(self) -> str:
+        return self._response.content[0].text

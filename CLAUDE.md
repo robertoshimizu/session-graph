@@ -626,14 +626,210 @@ cd ~/opt/apache-jena-fuseki && ./fuseki-server &
 
 ---
 
-## Next Steps (Sprint 6)
+## Sprint 6 Session 1 (2026-02-15): Pre-Sprint Fixes + Model Comparison
 
-1. **P0**: Subagent deduplication — skip subagent `.jsonl` files when parent session is processed (detect `subagents/` in path), or deduplicate knowledge triples at load time
-2. **P0**: Process ALL 1,542 Claude Code sessions (currently only 13 tested)
+### What Was Done (Previous Session — NOT YET COMMITTED)
+
+6 pre-sprint fixes (built by a team of agents):
+- Subagent dedup in `bulk_process.py` — 998 files filtered
+- `relatedTo` overuse — prompt guide + wrong/correct examples → 10% → 0.3%
+- Gemini JSON truncation — `max_output_tokens` 4096→8192, salvage partial triples
+- Wikidata aliases — 31→161 mappings in `entity_aliases.json`
+- API key warning suppression + model singleton in `agentic_linker_langgraph.py`
+- Pipeline readiness verified — 594 sessions, ~$6.77 estimated cost
+
+3 bugs found and fixed during testing:
+- Entity boundaries — prompt enforces 1-3 words, `is_valid_entity()` rejects 4+
+- Agent hallucinating QIDs — upgraded gemini-2.5-flash-lite → gemini-2.5-flash, added "only return QIDs from search results" rules
+- Cache corruption — cleaned false matches, removed orphaned transformers package, added singleton for Vertex AI init
+
+### What Was Done (This Session)
+
+1. **Assistant-only extraction** — `jsonl_to_rdf.py` now only sends assistant messages to Gemini (user messages are short prompts, assistant messages contain the actual knowledge analysis). Line 210: `entry_type == "assistant"` guard added.
+
+2. **5-model comparison** on enterprise-ontology session (79 assistant messages):
+
+| Model | Triples | Predicates | relatedTo | Verdict |
+|-------|---------|------------|-----------|---------|
+| **Gemini 2.5 Flash** | **142** | **15** | 1 (0.7%) | **Best overall** |
+| Gemini 3 Flash Preview | 123 | 18 | 2 (1.6%) | Close second, widest vocab |
+| Gemini 2.5 Flash-Lite | 109 | 13 | 12 (11%) | Noisy |
+| Claude Haiku 4.5 | 37 | 9 | 0 | High precision, terrible recall |
+| Gemini 2.0 Flash | 30 | 10 | 3 (10%) | Poor |
+
+Key finding: only 20% triple overlap between models — extraction is highly model-dependent.
+
+3. **Claude Vertex AI support** — Added `ClaudeModelWrapper` in `vertex_ai.py` wrapping `AnthropicVertex` client to match Gemini's `generate_content()` interface. Usage: `--model claude-haiku-4-5@20251001`
+
+4. **Gemini 3 Flash Preview support** — Requires `global` endpoint (not regional). Added `_GLOBAL_ONLY_MODELS` set and auto re-init with `location="global"` in `get_gemini_model()`.
+
+5. **Entity linking test** — Cache working correctly (all 241 entities served from SQLite cache for previously seen entities, agentic LLM calls only for new ones). Fixed region mismatch: `agentic_linker_langgraph.py` was using `CLOUD_ML_REGION`/`us-east5`, changed to `VERTEX_AI_LOCATION`/`us-central1`.
+
+### Known Issues / Broken State
+
+- **Entity linking output buffering** — `link_entities.py` output doesn't appear when piped. Fix: use `PYTHONUNBUFFERED=1` env var when running.
+- **Cache quality concerns** — Some cached Wikidata links are questionable: `agent` → Q37281213 (family name), `astrobee` → Q63976358 (ISS robot, not the data company). Consider cache cleanup or re-linking with stricter context.
+- **`vertexai` SDK deprecation warning** — cosmetic, won't affect until June 2026.
+- **Previous session's 6 fixes are NOT committed** — need to commit before further changes.
+
+### Files Modified (This Session)
+
+```
+pipeline/jsonl_to_rdf.py              # +assistant-only extraction filter (line 210)
+pipeline/vertex_ai.py                 # +ClaudeModelWrapper, +get_claude_model(), +_GLOBAL_ONLY_MODELS, +global endpoint re-init
+pipeline/agentic_linker_langgraph.py  # Fixed: CLOUD_ML_REGION → VERTEX_AI_LOCATION for region
+requirements.txt                      # +anthropic[vertex] (needs adding)
+output/test_run/                      # Test outputs (enterprise_ontology.ttl, slack_tmux.ttl, enterprise_flash_lite.ttl, enterprise_haiku.ttl, enterprise_gemini3_flash.ttl)
+```
+
+### How to Run Model Comparison
+
+```bash
+# Default (gemini-2.5-flash)
+.venv/bin/python -m pipeline.jsonl_to_rdf <session.jsonl> output/result.ttl
+
+# Flash-Lite (cheaper, noisier)
+.venv/bin/python -m pipeline.jsonl_to_rdf <session.jsonl> output/result.ttl --model gemini-2.5-flash-lite
+
+# Gemini 3 Flash Preview (needs global endpoint)
+.venv/bin/python -m pipeline.jsonl_to_rdf <session.jsonl> output/result.ttl --model gemini-3-flash-preview
+
+# Claude Haiku 4.5 via Vertex AI (needs us-east5)
+.venv/bin/python -m pipeline.jsonl_to_rdf <session.jsonl> output/result.ttl --model claude-haiku-4-5@20251001
+
+# Entity linking (use PYTHONUNBUFFERED=1 to see progress)
+PYTHONUNBUFFERED=1 .venv/bin/python -m pipeline.link_entities --input output/*.ttl --output output/wikidata_links.ttl
+```
+
+---
+
+## Pipeline Flow (Current)
+
+```
+1. SOURCE PARSING (per platform → RDF Turtle)
+──────────────────────────────────────────────
+
+  Claude Code (.jsonl)  ──→  jsonl_to_rdf.py    ──→  .ttl
+  DeepSeek (.json zip)  ──→  deepseek_to_rdf.py ──→  .ttl
+  Grok (.json zip)      ──→  grok_to_rdf.py     ──→  .ttl
+  Warp (SQLite)         ──→  warp_to_rdf.py     ──→  .ttl
+
+  Each parser:
+  ├── Reads source format
+  ├── Creates PROV-O + SIOC structure (sessions, messages, authors)
+  ├── Calls triple_extraction.py for each assistant message
+  │   └── Sends text to Gemini 2.5 Flash → (subject, predicate, object) triples
+  │       ├── Closed-world predicate vocab (24 predicates)
+  │       ├── Stopword filter (rejects /exit, 1400px, single chars)
+  │       ├── Entity length filter (1-3 words only)
+  │       └── Retry on JSON truncation (max 2 retries)
+  └── Outputs .ttl with session structure + knowledge triples
+
+  Shared modules:
+  ├── common.py          — namespaces, URI helpers, RDF node builders
+  ├── triple_extraction.py — Gemini prompt + parsing + normalization
+  └── vertex_ai.py       — Vertex AI auth (base64 creds), model factory
+                           (Gemini + Claude wrappers, global endpoint for Gemini 3)
+
+
+2. ENTITY LINKING (RDF → Wikidata owl:sameAs)
+──────────────────────────────────────────────
+
+  .ttl files ──→ link_entities.py ──→ wikidata_links.ttl
+
+  ├── Extracts all devkg:Entity labels from input .ttl files
+  ├── Normalizes via entity_aliases.json (161 mappings: k8s→kubernetes, etc.)
+  ├── For each entity:
+  │   ├── Check SQLite cache (.entity_cache.db)
+  │   ├── If miss → agentic_linker_langgraph.py (ReAct agent)
+  │   │   ├── LangGraph + Gemini 2.5 Flash
+  │   │   ├── Tool: search_wikidata (Wikidata API, up to 3 calls)
+  │   │   ├── Structured output: WikidataMatch (qid, confidence, reasoning)
+  │   │   └── Caches result in SQLite
+  │   └── Confidence threshold (0.7) — below → no owl:sameAs emitted
+  ├── Entity dedup: same QID → owl:sameAs between aliases
+  └── Outputs wikidata_links.ttl
+
+
+3. BULK PROCESSING (orchestrator — Claude Code sessions only)
+─────────────────────────────────────────────────────────────
+
+  bulk_process.py
+  ├── Finds all ~/.claude/projects/**/*.jsonl
+  ├── Filters out subagent files (avoids duplicate triples)
+  ├── SHA256 watermarks → skip already-processed sessions
+  ├── For each new session:
+  │   ├── Step 1: jsonl_to_rdf.py → output/claude/<session>.ttl
+  │   └── Step 2: link_entities.py → output/claude/wikidata_links.ttl
+  └── CLI: --dry-run, --limit N, --skip-linking, --force
+
+
+4. LOAD INTO TRIPLESTORE
+────────────────────────
+
+  load_fuseki.py ──→ Apache Jena Fuseki (SPARQL endpoint)
+
+  ├── Uploads .ttl files via Fuseki's /data endpoint
+  └── Query at http://localhost:3030
+
+
+5. QUERY (human or Claude Code)
+───────────────────────────────
+
+  ├── SPARQL queries (sample_queries.sparql — 14 templates)
+  ├── Federated queries → Wikidata (SERVICE <https://query.wikidata.org/sparql>)
+  └── Claude Code via devkg-sparql skill (auto-generates SPARQL)
+```
+
+### How to Run (Full Pipeline)
+
+```bash
+# Start Fuseki
+cd ~/opt/apache-jena-fuseki && ./fuseki-server &
+
+# Option A: Bulk process all Claude Code sessions
+.venv/bin/python -m pipeline.bulk_process
+
+# Option B: Single session
+.venv/bin/python -m pipeline.jsonl_to_rdf <session.jsonl> output/result.ttl
+
+# Option C: Other platforms (run individually)
+.venv/bin/python -m pipeline.deepseek_to_rdf external_knowledge/deepseek_data.zip output/deepseek.ttl --conversation 0
+.venv/bin/python -m pipeline.grok_to_rdf external_knowledge/grok_data.zip output/grok.ttl --conversation 0
+.venv/bin/python -m pipeline.warp_to_rdf output/warp.ttl --conversation 0 --min-exchanges 5
+
+# Entity linking (all outputs)
+PYTHONUNBUFFERED=1 .venv/bin/python -m pipeline.link_entities --input output/*.ttl --output output/wikidata_links.ttl
+
+# Load into Fuseki
+.venv/bin/python pipeline/load_fuseki.py output/*.ttl
+```
+
+---
+
+## Sprint 6 Session 2 (2026-02-15): Cache Cleanup + Pipeline Docs
+
+### What Was Done
+
+1. **Verified entity linking works** — tested 4 entities (neo4j, k8s, react, agent), all resolved correctly with confidence 1.0 via agentic linker (Gemini 2.5 Flash)
+2. **Inspected entity cache** — found 1,328 entries, ~90 with bad links from old heuristic linker (caching→animal behavior, rock pi→pigeon, ecs→endocannabinoid system, etc.)
+3. **Wiped entity cache** — deleted `.entity_cache.db` for clean start with agentic linker only
+4. **Documented pipeline flow** — added full pipeline flow diagram to CLAUDE.md
+
+### Files Modified
+
+```
+CLAUDE.md                          # +Pipeline Flow section, +Sprint 6 Session 2 progress
+pipeline/.entity_cache.db          # DELETED (wiped for clean re-linking)
+```
+
+---
+
+## Next Steps (Sprint 6 — Remaining)
+
+1. **P0**: Commit all changes (Sprint 6 sessions 1+2) — 5+ files modified
+2. **P0**: Process ALL 594 Claude Code sessions with gemini-2.5-flash (bulk_process.py)
 3. **P1**: Neo4j migration — import RDF via n10s, enable Cypher queries + vector search
-4. **P1**: Suppress `GOOGLE_API_KEY` warning noise in agentic linker
-5. **P2**: Vector embeddings on `sioc:content` for hybrid retrieval (Neo4j native vector indexes)
-6. **P2**: Evaluate Graphiti for temporal relationship tracking
-7. **P2**: Evaluate LangChain `LLMGraphTransformer` for comparison
-8. **P3**: Graphiti MCP server for Claude Code integration (chat with your KG)
-9. **Conditional**: Warp parser — only run when sessions have bulk content (most are too thin)
+4. **P2**: Vector embeddings on `sioc:content` for hybrid retrieval
+5. **P2**: Evaluate Graphiti for temporal relationship tracking
+6. **P3**: Graphiti MCP server for Claude Code integration

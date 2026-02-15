@@ -76,7 +76,7 @@ def _init_vertex_credentials() -> None:
     # Set env vars for langchain-google-genai Vertex AI mode
     os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "true"
     os.environ["GOOGLE_CLOUD_PROJECT"] = project or ""
-    os.environ["GOOGLE_CLOUD_LOCATION"] = os.environ.get("CLOUD_ML_REGION", "us-east5")
+    os.environ["GOOGLE_CLOUD_LOCATION"] = os.environ.get("VERTEX_AI_LOCATION", "us-central1")
 
     # Cleanup temp file on exit
     atexit.register(lambda: os.unlink(creds_path) if os.path.exists(creds_path) else None)

@@ -206,8 +206,8 @@ def build_graph(jsonl_path: str, skip_extraction: bool = False, model=None):
                             result_text = result_text[:500] + "..."
                         g.add((result_uri, SIOC.content, Literal(result_text)))
 
-        # Gemini triple extraction
-        if not skip_extraction and model is not None and full_text.strip():
+        # Gemini triple extraction (assistant messages only — that's where the knowledge is)
+        if not skip_extraction and model is not None and full_text.strip() and entry_type == "assistant":
             triples = extract_triples_gemini(model, full_text)
             add_triples_to_graph(g, msg_uri, triples, session_uri)
             triple_count += len(triples)
@@ -243,10 +243,13 @@ def main():
     # Initialize Vertex AI and get model
     model = None
     if not args.skip_extraction:
-        from pipeline.vertex_ai import init_vertex, get_gemini_model
+        from pipeline.vertex_ai import init_vertex, get_gemini_model, get_claude_model
         init_vertex()
-        model = get_gemini_model(model_name=args.model)
-        print(f"  Model: {model._model_name}", file=sys.stderr)
+        if args.model and args.model.startswith("claude"):
+            model = get_claude_model(model_name=args.model)
+        else:
+            model = get_gemini_model(model_name=args.model)
+            print(f"  Model: {model._model_name}", file=sys.stderr)
 
     print(f"Processing: {input_path}", file=sys.stderr)
     g = build_graph(str(input_path), skip_extraction=args.skip_extraction, model=model)
