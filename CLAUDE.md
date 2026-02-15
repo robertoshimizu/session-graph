@@ -3,6 +3,7 @@
 ## Origin Session
 
 Initial research session: `ec11ec1e-9d4f-4694-9a7d-b8cfce8e539c`
+
 - Conducted from `~/.claude/` on 2026-02-13
 - Copied to this project's session directory for continuity
 - Use `/research-sessions` to search it
@@ -10,6 +11,7 @@ Initial research session: `ec11ec1e-9d4f-4694-9a7d-b8cfce8e539c`
 ## Project Goal
 
 Build a unified developer knowledge graph that connects scattered knowledge from:
+
 - Codebases (multiple projects)
 - Claude Code session logs (`~/.claude/projects/**/*.jsonl`)
 - ChatGPT conversation exports
@@ -26,13 +28,13 @@ The system should enable **chatting with your entire knowledge base** (like Goog
 
 Do NOT create a custom ontology. Compose these 4+1 battle-tested standards:
 
-| Ontology | Role | Maturity |
-|---|---|---|
-| **PROV-O** | Backbone: who did what, when, from where (provenance) | W3C Recommendation |
-| **SIOC** | Conversation structure: messages, threads, platforms | W3C Member Submission |
-| **SKOS** | Concept taxonomy: topics, skills, technologies | W3C Recommendation |
-| **Dublin Core** | Universal metadata: dates, titles, creators | ISO Standard |
-| **Schema.org** | Cherry-pick: `SoftwareSourceCode`, `Question`, `Answer` | De facto standard |
+| Ontology        | Role                                                    | Maturity              |
+| --------------- | ------------------------------------------------------- | --------------------- |
+| **PROV-O**      | Backbone: who did what, when, from where (provenance)   | W3C Recommendation    |
+| **SIOC**        | Conversation structure: messages, threads, platforms    | W3C Member Submission |
+| **SKOS**        | Concept taxonomy: topics, skills, technologies          | W3C Recommendation    |
+| **Dublin Core** | Universal metadata: dates, titles, creators             | ISO Standard          |
+| **Schema.org**  | Cherry-pick: `SoftwareSourceCode`, `Question`, `Answer` | De facto standard     |
 
 Validated by IBM's GRAPH4CODE project (2B triples, same composition approach).
 
@@ -47,32 +49,32 @@ Validated by IBM's GRAPH4CODE project (2B triples, same composition approach).
 
 ### Key Frameworks
 
-| Framework | Purpose | Notes |
-|---|---|---|
-| **Cognee** (`topoteretes/cognee`) | Ingest 30+ sources, auto-generate KG, entity extraction, user-defined ontologies | 10K+ stars, supports Neo4j |
-| **Graphiti** (`getzep/graphiti`) | Temporal KG from conversations, tracks when facts were true, hybrid retrieval | 3K+ stars, **has MCP server for Claude Code** |
-| **LangChain + Neo4j** | `LLMGraphTransformer`, `GraphCypherQAChain`, hybrid vector+keyword+graph search | `pip install langchain-neo4j` |
-| **Microsoft GraphRAG** | Community-based summarization, multi-hop reasoning | Expensive indexing (100-1000x RAG) |
-| **LightRAG** | Lightweight alternative to MS GraphRAG | EMNLP 2025 |
+| Framework                         | Purpose                                                                          | Notes                                         |
+| --------------------------------- | -------------------------------------------------------------------------------- | --------------------------------------------- |
+| **Cognee** (`topoteretes/cognee`) | Ingest 30+ sources, auto-generate KG, entity extraction, user-defined ontologies | 10K+ stars, supports Neo4j                    |
+| **Graphiti** (`getzep/graphiti`)  | Temporal KG from conversations, tracks when facts were true, hybrid retrieval    | 3K+ stars, **has MCP server for Claude Code** |
+| **LangChain + Neo4j**             | `LLMGraphTransformer`, `GraphCypherQAChain`, hybrid vector+keyword+graph search  | `pip install langchain-neo4j`                 |
+| **Microsoft GraphRAG**            | Community-based summarization, multi-hop reasoning                               | Expensive indexing (100-1000x RAG)            |
+| **LightRAG**                      | Lightweight alternative to MS GraphRAG                                           | EMNLP 2025                                    |
 
 ### Conversation Parsers (Already Exist)
 
-| Source | Parser Tool |
-|---|---|
-| Claude Code | `claude-code-log` (714 stars), `claude-code-transcripts` (Simon Willison) |
-| ChatGPT | `chatgpt-exporter` (Tampermonkey script) |
-| Cursor | `cursor-history` CLI (`@johnlindquist/cursor-history`), SpecStory |
-| VS Code Copilot | Built-in: `Chat: Export Session...` (Ctrl+Shift+P) |
-| Multi-IDE | WayLog VS Code extension (Cursor, Copilot, Lingma, CodeBuddy) |
-| Warp / Grok / DeepSeek | No standardized tools (custom parser needed) |
+| Source                 | Parser Tool                                                               |
+| ---------------------- | ------------------------------------------------------------------------- |
+| Claude Code            | `claude-code-log` (714 stars), `claude-code-transcripts` (Simon Willison) |
+| ChatGPT                | `chatgpt-exporter` (Tampermonkey script)                                  |
+| Cursor                 | `cursor-history` CLI (`@johnlindquist/cursor-history`), SpecStory         |
+| VS Code Copilot        | Built-in: `Chat: Export Session...` (Ctrl+Shift+P)                        |
+| Multi-IDE              | WayLog VS Code extension (Cursor, Copilot, Lingma, CodeBuddy)             |
+| Warp / Grok / DeepSeek | No standardized tools (custom parser needed)                              |
 
 ### Code-to-Graph Tools
 
-| Tool | What It Does |
-|---|---|
-| `CodeGraph` (`ChrisRoyse/CodeGraph`) | Parses TS/JS, Python, Java, Go, C# via tree-sitter |
+| Tool                                         | What It Does                                               |
+| -------------------------------------------- | ---------------------------------------------------------- |
+| `CodeGraph` (`ChrisRoyse/CodeGraph`)         | Parses TS/JS, Python, Java, Go, C# via tree-sitter         |
 | `code-graph-rag` (`vitali87/code-graph-rag`) | tree-sitter AST to Memgraph (Neo4j-compatible), NL queries |
-| `tree-sitter-graph` (official) | Language-agnostic AST to arbitrary graph |
+| `tree-sitter-graph` (official)               | Language-agnostic AST to arbitrary graph                   |
 
 ### Hybrid Retrieval (KG + Vector)
 
@@ -145,15 +147,15 @@ ex:concept-supabase-auth a skos:Concept ;
 
 ## Cost Analysis
 
-| Component | Tool | Cost |
-|---|---|---|
-| Graph DB | Neo4j Community (Docker) or AuraDB Free | $0 |
-| KG framework | Cognee or Graphiti (open source) | $0 |
-| Code parsing | tree-sitter + CodeGraph | $0 |
-| Conversation parsing | claude-code-log, chatgpt-exporter, cursor-history | $0 |
-| Orchestration | LangChain + LangGraph | $0 |
-| Embeddings | Ollama (nomic-embed-text, local) | $0 |
-| LLM extraction | Ollama (llama3/deepseek, local) or Claude via Vertex | $0 or API cost |
+| Component            | Tool                                                 | Cost           |
+| -------------------- | ---------------------------------------------------- | -------------- |
+| Graph DB             | Neo4j Community (Docker) or AuraDB Free              | $0             |
+| KG framework         | Cognee or Graphiti (open source)                     | $0             |
+| Code parsing         | tree-sitter + CodeGraph                              | $0             |
+| Conversation parsing | claude-code-log, chatgpt-exporter, cursor-history    | $0             |
+| Orchestration        | LangChain + LangGraph                                | $0             |
+| Embeddings           | Ollama (nomic-embed-text, local)                     | $0             |
+| LLM extraction       | Ollama (llama3/deepseek, local) or Claude via Vertex | $0 or API cost |
 
 ## Reference Projects
 
@@ -166,17 +168,20 @@ ex:concept-supabase-auth a skos:Concept ;
 ## Sprint 1 Results (2026-02-13)
 
 ### What Was Built
+
 - [x] OWL ontology composing PROV-O + SIOC + SKOS + DC + Schema.org → `ontology/devkg.ttl`
 - [x] rdflib pipeline: JSONL → RDF Turtle → Fuseki → SPARQL → `pipeline/jsonl_to_rdf.py`
 - [x] 3,006 triples loaded into Apache Jena Fuseki (2 sessions, 78 tool calls, 103 topics)
 - [x] Cognee evaluation → rejected (no RDF output, slow, ontology mismatch)
 
 ### Critical Failure: Flat Tags Instead of Knowledge Triples
+
 The pipeline extracts `["Prolog", "Symbolic AI"]` as independent tags per message. It CANNOT answer relationship questions like "how does Prolog fit into neurosymbolic?" because no `(subject, predicate, object)` triples are stored. **A knowledge graph without relationships is just a tag cloud.**
 
 See `README.md` for full post-mortem, multi-platform assessment, and action items.
 
 ### Files (Sprint 1 — superseded by Sprint 2)
+
 ```
 ontology/devkg.ttl              # OWL ontology (extended in Sprint 2)
 pipeline/jsonl_to_rdf.py        # JSONL → RDF (flat tags — FIXED in Sprint 2)
@@ -193,6 +198,7 @@ README.md                       # Project documentation (includes Sprint 1 post-
 ## Sprint 2 Results (2026-02-14)
 
 ### What Was Built
+
 - [x] **P0 FIXED**: Replaced flat topic extraction with `(subject, predicate, object)` triple extraction
 - [x] **P0 FIXED**: Added 3 semantic verification SPARQL queries (Queries 6-8) as acceptance criteria
 - [x] Replaced Ollama llama3 with **Gemini 2.5 Flash on Vertex AI** (uses existing GCP credits)
@@ -203,14 +209,14 @@ README.md                       # Project documentation (includes Sprint 1 post-
 
 ### Sprint 1 → Sprint 2 Comparison
 
-| Metric | Sprint 1 (flat tags) | Sprint 2 (knowledge triples) |
-|--------|---------------------|------------------------------|
-| Total RDF triples | 3,006 (2 sessions) | 2,185 (1 session) |
-| Knowledge relationships | **0** | **128** |
-| Distinct entities | N/A (flat tags) | **120** |
-| Predicates used | 0 | **18 of 24** |
-| "How does X relate to Y?" | **Cannot answer** | **Works with provenance** |
-| LLM backend | Ollama llama3 (local) | Gemini 2.5 Flash (Vertex AI) |
+| Metric                    | Sprint 1 (flat tags)  | Sprint 2 (knowledge triples) |
+| ------------------------- | --------------------- | ---------------------------- |
+| Total RDF triples         | 3,006 (2 sessions)    | 2,185 (1 session)            |
+| Knowledge relationships   | **0**                 | **128**                      |
+| Distinct entities         | N/A (flat tags)       | **120**                      |
+| Predicates used           | 0                     | **18 of 24**                 |
+| "How does X relate to Y?" | **Cannot answer**     | **Works with provenance**    |
+| LLM backend               | Ollama llama3 (local) | Gemini 2.5 Flash (Vertex AI) |
 
 ### Predicate Distribution
 
@@ -242,6 +248,7 @@ ngrok          --enables-->        tunneling local services
 The key design decision: define a **closed-world predicate vocabulary** as first-class OWL ObjectProperties, not ad-hoc strings. The LLM is instructed to use ONLY these predicates. A normalization step maps any LLM-generated predicate to the closest match (fallback: `relatedTo`).
 
 **24 predicates defined**, mapped to standards where possible:
+
 - `devkg:isPartOf` → `rdfs:subPropertyOf dcterms:isPartOf`
 - `devkg:hasPart` → `rdfs:subPropertyOf dcterms:hasPart`
 - `devkg:broader` → `rdfs:subPropertyOf skos:broader`
@@ -250,6 +257,7 @@ The key design decision: define a **closed-world predicate vocabulary** as first
 - 19 custom predicates: `uses`, `dependsOn`, `enables`, `implements`, `extends`, `alternativeTo`, `solves`, `produces`, `configures`, `composesWith`, `provides`, `requires`, `isTypeOf`, `builtWith`, `deployedOn`, `storesIn`, `queriedWith`, `integratesWith`, `servesAs`
 
 ### New Classes
+
 - `devkg:Entity` (subclass of `prov:Entity`) — extracted technical concepts
 - `devkg:KnowledgeTriple` — reified triple for provenance (links to source message + session)
 
@@ -301,6 +309,7 @@ cd ~/opt/apache-jena-fuseki && ./fuseki-server &
 ```
 
 ### Known Issues
+
 - ~5% of Gemini responses truncate mid-JSON (long outputs) — extraction gracefully returns `[]`. A retry mechanism would help.
 - `vertexai` SDK deprecation warning (cosmetic, won't affect until June 2026)
 - Some noisy entities slip through (`/exit`, `command name`) — could add a stopword filter
@@ -325,6 +334,7 @@ cd ~/opt/apache-jena-fuseki && ./fuseki-server &
 - [x] **Proof of concept validated** (3/3 entities successfully linked)
 
 **Test Results:**
+
 ```
 Neo4j    → Q1628290 ✅ (graph database management system implemented in Java)
 Python   → Q28865 ✅ (general-purpose programming language)
@@ -332,22 +342,23 @@ React    → Q19399674 ✅ (JavaScript library for building user interfaces)
 ```
 
 **Ambiguity Detection Working:**
+
 - Neo4j: 4 candidates → selected Q1628290 (database), not Q107381824 (Python library)
 - React: 2 candidates → selected Q19399674 (JS library), not Q2134522 (chemical)
 
 ### Wikidata Coverage Assessment
 
-| Entity | QID | Status | Description |
-|--------|-----|--------|-------------|
-| **Neo4j** | Q1628290 | ✅ | graph database management system implemented in Java |
-| **Kubernetes** | Q22661306 | ✅ | software to manage containers on a server-cluster |
-| **Visual Studio Code** | Q19841877 | ✅ | source code editor developed by Microsoft |
-| **FastAPI** | Q101119404 | ✅ | software framework for developing web applications in Python |
-| **Pydantic** | Q107381687 | ✅ | Python library for data parsing and validation using Python type hints |
-| **Apache Jena** | Q1686799 | ✅ | open source semantic web framework for Java |
-| **SPARQL** | Q54871 | ✅ | RDF query language |
-| **Supabase** | Q136776342 | ✅ | open source backend platform for app development |
-| **Docker** | ❌ | Missing | (returns "stevedore" occupation instead) |
+| Entity                 | QID        | Status  | Description                                                            |
+| ---------------------- | ---------- | ------- | ---------------------------------------------------------------------- |
+| **Neo4j**              | Q1628290   | ✅      | graph database management system implemented in Java                   |
+| **Kubernetes**         | Q22661306  | ✅      | software to manage containers on a server-cluster                      |
+| **Visual Studio Code** | Q19841877  | ✅      | source code editor developed by Microsoft                              |
+| **FastAPI**            | Q101119404 | ✅      | software framework for developing web applications in Python           |
+| **Pydantic**           | Q107381687 | ✅      | Python library for data parsing and validation using Python type hints |
+| **Apache Jena**        | Q1686799   | ✅      | open source semantic web framework for Java                            |
+| **SPARQL**             | Q54871     | ✅      | RDF query language                                                     |
+| **Supabase**           | Q136776342 | ✅      | open source backend platform for app development                       |
+| **Docker**             | ❌         | Missing | (returns "stevedore" occupation instead)                               |
 
 **Coverage:** 88% of major developer tools
 
@@ -411,12 +422,12 @@ test/quick_links.ttl                           # Validated RDF output
 
 ### Integration Results
 
-| Platform | Messages | Knowledge Triples | Notes |
-|----------|----------|-------------------|-------|
-| Claude Code | 55 | 180 | Full session with tool calls |
-| DeepSeek | 8 | 111 | MCP integration conversation |
-| Grok | 14 | 165 | Medical diagnosis logic |
-| Warp | 12 | 3 | User queries only (thin data) |
+| Platform    | Messages | Knowledge Triples | Notes                         |
+| ----------- | -------- | ----------------- | ----------------------------- |
+| Claude Code | 55       | 180               | Full session with tool calls  |
+| DeepSeek    | 8        | 111               | MCP integration conversation  |
+| Grok        | 14       | 165               | Medical diagnosis logic       |
+| Warp        | 12       | 3                 | User queries only (thin data) |
 
 - **7,462 total RDF triples** loaded in Fuseki
 - **233 Wikidata owl:sameAs links** (51.8% of 450 entities)
@@ -427,15 +438,16 @@ test/quick_links.ttl                           # Validated RDF output
 
 Replaced naive heuristic entity linker with **ReAct agent** using LLM + Wikidata API tool:
 
-| Approach | Precision | Avg Latency | Notes |
-|----------|-----------|-------------|-------|
-| Heuristic (old) | ~50% | <1s | Keyword matching, many false positives |
-| Agentic (ADK) | 7/7 | 4.7s | Google ADK, text parsing (fragile) |
-| Agentic (LangGraph) | 7/7 | 4.3s | LangGraph + structured output (robust) |
+| Approach            | Precision | Avg Latency | Notes                                  |
+| ------------------- | --------- | ----------- | -------------------------------------- |
+| Heuristic (old)     | ~50%      | <1s         | Keyword matching, many false positives |
+| Agentic (ADK)       | 7/7       | 4.7s        | Google ADK, text parsing (fragile)     |
+| Agentic (LangGraph) | 7/7       | 4.3s        | LangGraph + structured output (robust) |
 
 **Winner: LangGraph** — same precision as ADK, but native structured output (`response_format=WikidataMatch`) eliminates parsing failures. In fair ceteris paribus test, ADK failed 3/7 due to regex parsing of free-text output.
 
 Key capability: **ReAct loop resolves abbreviations and synonyms**:
+
 - "apis" → searches "application programming interface" → Q165194 ✅
 - "k8s" → searches "kubernetes" → Q22661306 ✅
 - "js" → searches "javascript" → Q2005 ✅
@@ -509,16 +521,16 @@ cd ~/opt/apache-jena-fuseki && ./fuseki-server &
 
 ### E2E Pipeline Test (13 Sessions)
 
-| Metric | Value |
-|--------|-------|
-| Sessions processed | 13 (8 unique + 5 subagent) |
-| Total RDF triples in Fuseki | 7,181 |
-| Entities | 360 |
-| Knowledge triples | 420 (413 unique) |
-| Wikidata owl:sameAs links | 120 (33% link rate) |
-| Deduplicated entity pairs | 19 |
-| Low-confidence rejected | 4 |
-| Predicates used | 20 of 24 |
+| Metric                      | Value                      |
+| --------------------------- | -------------------------- |
+| Sessions processed          | 13 (8 unique + 5 subagent) |
+| Total RDF triples in Fuseki | 7,181                      |
+| Entities                    | 360                        |
+| Knowledge triples           | 420 (413 unique)           |
+| Wikidata owl:sameAs links   | 120 (33% link rate)        |
+| Deduplicated entity pairs   | 19                         |
+| Low-confidence rejected     | 4                          |
+| Predicates used             | 20 of 24                   |
 
 ### What Worked Well
 
@@ -596,14 +608,14 @@ cd ~/opt/apache-jena-fuseki && ./fuseki-server &
 
 ### Comparison: SPARQL vs Grep
 
-| Metric | SPARQL (new) | Grep (old) |
-|--------|-------------|------------|
-| Tool calls | **1** | 5-10+ |
-| Token consumption | **~2K** | 50K-350K |
-| Relationship questions | **Yes** | **No** |
-| Cross-platform queries | **Yes** | No |
-| Provenance tracking | **Yes** | Manual |
-| Wikidata enrichment | **Yes** | No |
+| Metric                 | SPARQL (new) | Grep (old) |
+| ---------------------- | ------------ | ---------- |
+| Tool calls             | **1**        | 5-10+      |
+| Token consumption      | **~2K**      | 50K-350K   |
+| Relationship questions | **Yes**      | **No**     |
+| Cross-platform queries | **Yes**      | No         |
+| Provenance tracking    | **Yes**      | Manual     |
+| Wikidata enrichment    | **Yes**      | No         |
 
 ### Graph Traversal Examples Validated
 
@@ -631,6 +643,7 @@ cd ~/opt/apache-jena-fuseki && ./fuseki-server &
 ### What Was Done (Previous Session — NOT YET COMMITTED)
 
 6 pre-sprint fixes (built by a team of agents):
+
 - Subagent dedup in `bulk_process.py` — 998 files filtered
 - `relatedTo` overuse — prompt guide + wrong/correct examples → 10% → 0.3%
 - Gemini JSON truncation — `max_output_tokens` 4096→8192, salvage partial triples
@@ -639,6 +652,7 @@ cd ~/opt/apache-jena-fuseki && ./fuseki-server &
 - Pipeline readiness verified — 594 sessions, ~$6.77 estimated cost
 
 3 bugs found and fixed during testing:
+
 - Entity boundaries — prompt enforces 1-3 words, `is_valid_entity()` rejects 4+
 - Agent hallucinating QIDs — upgraded gemini-2.5-flash-lite → gemini-2.5-flash, added "only return QIDs from search results" rules
 - Cache corruption — cleaned false matches, removed orphaned transformers package, added singleton for Vertex AI init
@@ -649,13 +663,13 @@ cd ~/opt/apache-jena-fuseki && ./fuseki-server &
 
 2. **5-model comparison** on enterprise-ontology session (79 assistant messages):
 
-| Model | Triples | Predicates | relatedTo | Verdict |
-|-------|---------|------------|-----------|---------|
-| **Gemini 2.5 Flash** | **142** | **15** | 1 (0.7%) | **Best overall** |
-| Gemini 3 Flash Preview | 123 | 18 | 2 (1.6%) | Close second, widest vocab |
-| Gemini 2.5 Flash-Lite | 109 | 13 | 12 (11%) | Noisy |
-| Claude Haiku 4.5 | 37 | 9 | 0 | High precision, terrible recall |
-| Gemini 2.0 Flash | 30 | 10 | 3 (10%) | Poor |
+| Model                  | Triples | Predicates | relatedTo | Verdict                         |
+| ---------------------- | ------- | ---------- | --------- | ------------------------------- |
+| **Gemini 2.5 Flash**   | **142** | **15**     | 1 (0.7%)  | **Best overall**                |
+| Gemini 3 Flash Preview | 123     | 18         | 2 (1.6%)  | Close second, widest vocab      |
+| Gemini 2.5 Flash-Lite  | 109     | 13         | 12 (11%)  | Noisy                           |
+| Claude Haiku 4.5       | 37      | 9          | 0         | High precision, terrible recall |
+| Gemini 2.0 Flash       | 30      | 10         | 3 (10%)   | Poor                            |
 
 Key finding: only 20% triple overlap between models — extraction is highly model-dependent.
 
@@ -829,7 +843,5 @@ pipeline/.entity_cache.db          # DELETED (wiped for clean re-linking)
 
 1. **P0**: Commit all changes (Sprint 6 sessions 1+2) — 5+ files modified
 2. **P0**: Process ALL 594 Claude Code sessions with gemini-2.5-flash (bulk_process.py)
-3. **P1**: Neo4j migration — import RDF via n10s, enable Cypher queries + vector search
-4. **P2**: Vector embeddings on `sioc:content` for hybrid retrieval
-5. **P2**: Evaluate Graphiti for temporal relationship tracking
-6. **P3**: Graphiti MCP server for Claude Code integration
+
+load in graphdatabse such as neo4j and develop a hybrid approach are out of scope.
