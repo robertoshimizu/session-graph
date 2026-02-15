@@ -576,7 +576,57 @@ cd ~/opt/apache-jena-fuseki && ./fuseki-server &
 
 ---
 
-## Next Steps (Sprint 5)
+## Sprint 5 Results (2026-02-15): DevKG SPARQL Skill + Wikidata Traversal
+
+### What Was Built
+
+- [x] **SPARQL skill** (`.claude/skills/devkg-sparql/SKILL.md`, 611 lines) — teaches Claude Code to query Fuseki via SPARQL instead of grepping raw JSONL files
+- [x] **14 local graph query templates**: entity lookup (with provenance), entity-to-entity, predicate search, session listing, topic search, cross-platform overlap, Wikidata enrichment, full-text search, 2-hop neighborhood, hub detection, cross-session overlap, path discovery, project knowledge map, sibling entities
+- [x] **6 Wikidata traversal templates** (W1-W6): entity properties, peer discovery, disambiguation, category hierarchy, relationship bridge, batch enrichment
+- [x] **Fosfomycin Wikidata link fixed**: was incorrectly linked to Q421268 (tubocurarine), corrected to Q183554 (fosfomycin) via SPARQL UPDATE
+- [x] **`.gitignore` updated**: `.claude/*` with `!.claude/skills/` exception to track skills in git
+
+### Key Design Decisions
+
+- **Provenance in every query**: Templates 1 and 5 include `sourceFile`, `platform`, and content snippet so the agent can trace back to the original document
+- **Bidirectional traversal**: Template 1 uses UNION to search both outbound and inbound edges (relationships may be stored in either direction)
+- **`FILTER(LANG(?label) = "")` everywhere**: Avoids duplicate rows from lang-tagged vs untagged literals (data quality issue from earlier sprints)
+- **Wikidata as enrichment layer**: local KG knows dosing protocols and integrations; Wikidata knows drug classifications, software ecosystems, and peer alternatives. The skill teaches a Local→Wikidata→Back workflow.
+- **Multi-line `--data-urlencode` with double quotes**: avoids shell escaping issues with `!=` and `""` in SPARQL operators
+
+### Comparison: SPARQL vs Grep
+
+| Metric | SPARQL (new) | Grep (old) |
+|--------|-------------|------------|
+| Tool calls | **1** | 5-10+ |
+| Token consumption | **~2K** | 50K-350K |
+| Relationship questions | **Yes** | **No** |
+| Cross-platform queries | **Yes** | No |
+| Provenance tracking | **Yes** | Manual |
+| Wikidata enrichment | **Yes** | No |
+
+### Graph Traversal Examples Validated
+
+- **2-hop**: `warp plugin --uses--> warp native notification system --uses--> osc 777 escape sequences`
+- **Hub detection**: `suggestion mode` (69 edges), `claude code` (22), `excel spreadsheet` (18)
+- **Siblings**: fosfomycin → nitrofurantoin, phenazopyridine (share `isTypeOf medication`, `servesAs outpatient treatment`)
+- **Wikidata enrichment**: nitrofurantoin local (dosing) + Wikidata (ATC code J01XE01, treats UTI, cystitis, gram-negative)
+
+### Files Created/Modified
+
+```
+.claude/skills/devkg-sparql/SKILL.md  # NEW: SPARQL skill (611 lines, 14 local + 6 Wikidata templates)
+.gitignore                            # Updated: .claude/* with !.claude/skills/ exception
+```
+
+### Data Fixes
+
+- Fosfomycin `owl:sameAs` corrected: Q421268 (tubocurarine) → Q183554 (fosfomycin) via SPARQL UPDATE on Fuseki
+- Total triples in Fuseki: 7,183
+
+---
+
+## Next Steps (Sprint 6)
 
 1. **P0**: Subagent deduplication — skip subagent `.jsonl` files when parent session is processed (detect `subagents/` in path), or deduplicate knowledge triples at load time
 2. **P0**: Process ALL 1,542 Claude Code sessions (currently only 13 tested)

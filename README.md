@@ -15,7 +15,8 @@ A unified developer knowledge graph that extracts structured `(subject, predicat
 - [Multi-Platform Assessment](#multi-platform-assessment)
 - [Entity Disambiguation Strategy](#entity-disambiguation-strategy)
 - [Ontology Reference](#ontology-reference)
-- [Parking Lot (Sprint 3+)](#parking-lot-sprint-3)
+- [Sprint 5 — SPARQL Skill + Wikidata Traversal (2026-02-15)](#sprint-5--sparql-skill--wikidata-traversal-2026-02-15)
+- [Parking Lot](#parking-lot)
 - [Lessons Learned](#lessons-learned)
 
 ---
@@ -413,20 +414,58 @@ Visual schema: **[ontology/devkg_schema.png](ontology/devkg_schema.png)**
 
 ---
 
-## Parking Lot (Sprint 3+)
+## Sprint 5 — SPARQL Skill + Wikidata Traversal (2026-02-15)
 
-| # | Item | Description |
-|---|------|-------------|
-| 1 | **`devkg:hasSourceFile`** | Link sessions to their raw source file path (JSONL, SQLite, JSON) |
-| 2 | **`devkg:Project`** | New class linking sessions to project context. Enables "what topics span multiple projects?" |
-| 3 | **Cursor extraction via `cursor-history`** | Use S2thend/cursor-history npm package (JSON export, handles workspace mapping, role inference, schema versions) instead of custom SQLite parser |
-| 4 | **Claude Code post-session hook** | Auto-trigger pipeline ingestion when a session ends |
-| 5 | **Sync daemon** | Periodic ingestion for Cursor/Warp/VS Code with watermark-based dedup (cron/launchd) |
-| 6 | **Wikidata entity linking** | Hybrid approach: LLM canonicalizes → Wikidata API confirms → `owl:sameAs` triples. ~200-300 lines. Prototype at `pipeline/link_entities.py` |
-| 7 | **Per-platform parsers** | `deepseek_to_rdf.py`, `grok_to_rdf.py`, `warp_to_rdf.py`, `cursor_to_rdf.py`, `vscode_to_rdf.py` |
-| 8 | **Retry logic for Gemini truncation** | ~5% of responses truncate mid-JSON. Add retry with shorter text on failure |
-| 9 | **Neo4j migration** | Evaluate Neo4j as primary store for better graph traversal + hybrid retrieval (Cypher + vector) |
-| 10 | **Vector embeddings** | Add embeddings on `sioc:content` for fuzzy/semantic search alongside SPARQL |
+### Goal
+
+Replace grep-based session search (50K-350K tokens, 5-15 tool calls) with SPARQL queries against the knowledge graph (2K tokens, 1 tool call).
+
+### What Was Built
+
+- **SPARQL skill** (`.claude/skills/devkg-sparql/SKILL.md`) — user-invocable skill teaching Claude Code to query Fuseki via SPARQL
+- **14 local graph templates**: single-hop lookups, 2-hop neighborhood traversal, hub detection, path discovery, cross-session overlap, sibling entities, project knowledge maps — all with provenance (source file + content snippet)
+- **6 Wikidata traversal templates** (W1-W6): entity properties, peer discovery, disambiguation, category hierarchy, relationship bridge, batch enrichment
+- **Workflow**: Local KG → `owl:sameAs` QID → Wikidata SPARQL → discover new knowledge → return to local queries
+
+### SPARQL vs Grep Comparison
+
+| Metric | SPARQL | Grep |
+|--------|--------|------|
+| Tool calls | **1** | 5-10+ |
+| Tokens | **~2K** | 50K-350K |
+| Relationship queries | **Yes** | No |
+| Cross-platform | **Yes** | No |
+| Wikidata enrichment | **Yes** | No |
+
+### Wikidata Enrichment Example
+
+| Source | What we know about Nitrofurantoin |
+|--------|----------------------------------|
+| **Local KG** | medication, 100mg, every 12h, oral, 7 days, outpatient |
+| **Wikidata** | ATC code J01XE01, subclass of nitrofuran, treats UTI, cystitis, gram-negative |
+
+### Data Fix
+
+Fosfomycin `owl:sameAs` corrected: Q421268 (tubocurarine — wrong!) → Q183554 (fosfomycin) via SPARQL UPDATE.
+
+---
+
+## Parking Lot
+
+| # | Item | Status | Description |
+|---|------|--------|-------------|
+| 1 | ~~`devkg:hasSourceFile`~~ | **Done (Sprint 3)** | Sessions linked to raw source file paths |
+| 2 | ~~`devkg:Project`~~ | **Done (Sprint 3)** | Sessions linked to project context |
+| 3 | **Cursor extraction** | Dropped (Sprint 4) | `cursor-history` CLI unmaintained, low value |
+| 4 | **Post-session hook** | Skeleton only | `hooks/post_session_hook.sh` exists but untested |
+| 5 | **Sync daemon** | Skeleton only | `daemon/sync_daemon.py` exists but untested |
+| 6 | ~~**Wikidata linking**~~ | **Done (Sprint 3-4)** | Agentic LangGraph linker, 120 links at 33% rate |
+| 7 | ~~**Per-platform parsers**~~ | **Done (Sprint 3)** | DeepSeek, Grok, Warp parsers |
+| 8 | ~~**Retry logic**~~ | **Done (Sprint 3)** | MAX_RETRIES=2 in triple extraction |
+| 9 | **Neo4j migration** | Open | Import RDF via n10s, Cypher + vector search |
+| 10 | **Vector embeddings** | Open | Embeddings on `sioc:content` for hybrid retrieval |
+| 11 | **Subagent deduplication** | Open | 76% triple duplication from overlapping subagent files |
+| 12 | **Bulk processing (all sessions)** | Open | Only 13 of 1,542 sessions processed |
 
 ---
 
