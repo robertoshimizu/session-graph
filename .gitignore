@@ -9,8 +9,9 @@ __pycache__/
 # macOS
 .DS_Store
 
-# Claude Code local settings
-.claude/
+# Claude Code local settings (keep skills tracked)
+.claude/*
+!.claude/skills/
 
 # SQLite caches
 *.db
