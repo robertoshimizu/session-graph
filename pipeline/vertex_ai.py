@@ -77,7 +77,7 @@ def get_gemini_model(model_name: str | None = None) -> GenerativeModel:
     config = GenerationConfig(
         response_mime_type="application/json",
         temperature=0.2,
-        max_output_tokens=4096,
+        max_output_tokens=8192,
     )
 
     return GenerativeModel(model_name, generation_config=config)

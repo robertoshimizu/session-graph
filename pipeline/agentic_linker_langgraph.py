@@ -19,7 +19,12 @@ import json
 import base64
 import tempfile
 import atexit
+import warnings
 from typing import Optional
+
+# Suppress noisy warnings from langchain-google-genai when using Vertex AI
+warnings.filterwarnings("ignore", message=".*GOOGLE_API_KEY.*")
+warnings.filterwarnings("ignore", message=".*GEMINI_API_KEY.*")
 
 import requests
 from dotenv import load_dotenv
@@ -33,8 +38,16 @@ from langgraph.prebuilt import create_react_agent
 # Vertex AI credential setup
 # ---------------------------------------------------------------------------
 
+_vertex_initialized = False
+
+
 def _init_vertex_credentials() -> None:
-    """Decode base64 GCP credentials and set env vars for Vertex AI."""
+    """Decode base64 GCP credentials and set env vars for Vertex AI. Runs once."""
+    global _vertex_initialized
+    if _vertex_initialized:
+        return
+    _vertex_initialized = True
+
     load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
 
     b64_creds = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS_BASE64")
@@ -161,13 +174,29 @@ Steps:
    - "backend" -> try "back end" or "backend development"
    - "agent" -> try "software agent" or "intelligent agent"
 4. You may call the search tool up to 3 times total.
-5. When you have found the best match (or determined there is none), return your answer.
+5. CRITICAL: Only return a QID that appeared in your search results. Never guess a QID from memory.
+6. CRITICAL: The returned QID's label must semantically match the input entity. If the best
+   search result is about something unrelated, return qid="none".
+7. When you have found the best match (or determined there is none), return your answer.
 """
+
+
+# Module-level singleton: reuse the same model instance across calls to avoid
+# repeated initialization overhead and suppress per-instantiation warnings.
+_shared_model = None
+
+
+def _get_shared_model():
+    """Return a shared ChatGoogleGenerativeAI instance (created once)."""
+    global _shared_model
+    if _shared_model is None:
+        _shared_model = ChatGoogleGenerativeAI(model="gemini-2.5-flash")
+    return _shared_model
 
 
 def create_linker_agent():
     """Create the ReAct agent for Wikidata entity linking."""
-    model = ChatGoogleGenerativeAI(model="gemini-2.5-flash-lite")
+    model = _get_shared_model()
     tools = [search_wikidata]
 
     agent = create_react_agent(
@@ -189,7 +218,8 @@ def link_entity(
 ) -> tuple[WikidataMatch, float]:
     """Link a single entity to Wikidata using the ReAct agent.
 
-    Creates a fresh agent per call to ensure no state leakage between entities.
+    Reuses a shared model instance; agent state is per-invocation
+    (no leakage between entities).
     Returns (WikidataMatch, elapsed_seconds).
     """
     agent = create_linker_agent()

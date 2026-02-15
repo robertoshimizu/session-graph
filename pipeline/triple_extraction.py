@@ -18,6 +18,10 @@ import re
 import sys
 
 
+# Global counter for truncation events across the pipeline run
+truncation_count = 0
+
+
 # =============================================================================
 # Curated Predicate Vocabulary (mirrors devkg.ttl)
 # =============================================================================
@@ -77,6 +81,9 @@ def is_valid_entity(name: str) -> bool:
     # Pure numbers
     if re.match(r"^\d+$", name):
         return False
+    # Reject phrases with 4+ words — entities should be 1-3 words
+    if len(name.split()) > 3:
+        return False
     return True
 
 
@@ -99,10 +106,24 @@ RULES:
 4. Skip messages about formatting, UI layout, greetings, pleasantries, or tool invocation mechanics.
 5. Return [] for messages with no extractable technical knowledge.
 6. Each triple must have "subject", "predicate", and "object" string fields.
-7. Keep entity names concise (1-4 words typically). Use the most common/recognized name.
+7. Entity names MUST be 1-3 words maximum. Use the most common/recognized name for the technology, tool, or concept. NEVER use full phrases or descriptions as entity names.
+   - GOOD entities: "neo4j", "python", "claude agent sdk", "urinary tract infection"
+   - BAD entities: "notification when claude finishes responding", "follow-up if no improvement in 48h", "migration from npm to native"
+   - If you can't name it in 1-3 words, it's not an entity — it's a description. Skip it.
+8. Use "relatedTo" ONLY as a last resort when NO other predicate fits. Always prefer a specific predicate. Ask yourself: does X use Y? depend on Y? enable Y? integrate with Y? serve as Y? If any specific predicate applies, use it instead of relatedTo.
 
 PREDICATE VOCABULARY:
 {vocab_lines}
+
+PREDICATE SELECTION GUIDE (to avoid overusing "relatedTo"):
+- If X connects to or works with external system Y → use "integratesWith" (not relatedTo)
+- If X is a kind/type/instance of category Y → use "isTypeOf" (not relatedTo)
+- If X needs or depends on Y to function → use "requires" or "dependsOn" (not relatedTo)
+- If X makes Y possible or supports Y → use "enables" (not relatedTo)
+- If X can substitute for Y → use "alternativeTo" (not relatedTo)
+- If X employs or leverages Y → use "uses" (not relatedTo)
+- If X generates or creates Y → use "produces" (not relatedTo)
+- If X handles or transforms Y → use "configures" or "produces" (not relatedTo)
 
 EXAMPLES:
 
@@ -120,6 +141,20 @@ Output: []
 
 Input: "The Claude Agent SDK uses the Model Context Protocol to connect to external tools"
 Output: [{{"subject":"claude agent sdk","predicate":"uses","object":"model context protocol"}},{{"subject":"model context protocol","predicate":"enables","object":"external tool integration"}}]
+
+WRONG vs CORRECT (do NOT use relatedTo when a specific predicate fits):
+
+Input: "The MCP adapter translates database queries into MCP-formatted requests"
+WRONG:  [{{"subject":"mcp adapter","predicate":"relatedTo","object":"db query"}}]
+CORRECT: [{{"subject":"mcp adapter","predicate":"produces","object":"mcp-formatted request"}},{{"subject":"mcp adapter","predicate":"integratesWith","object":"database"}}]
+
+Input: "ProbLog is a probabilistic logic programming language based on Prolog"
+WRONG:  [{{"subject":"problog","predicate":"relatedTo","object":"prolog"}}]
+CORRECT: [{{"subject":"problog","predicate":"isTypeOf","object":"probabilistic logic programming language"}},{{"subject":"problog","predicate":"extends","object":"prolog"}}]
+
+Input: "Tunnel architecture provides an alternative to reverse proxy for exposing services"
+WRONG:  [{{"subject":"tunnel architecture","predicate":"relatedTo","object":"reverse proxy"}}]
+CORRECT: [{{"subject":"tunnel architecture","predicate":"alternativeTo","object":"reverse proxy"}},{{"subject":"tunnel architecture","predicate":"enables","object":"exposing services"}}]
 
 Now extract triples from this text:
 
@@ -177,14 +212,76 @@ def normalize_triple(triple: dict) -> dict:
 
 
 # =============================================================================
+# Truncation Detection & Salvage
+# =============================================================================
+
+def _is_truncated(raw: str) -> bool:
+    """Detect if the LLM response was truncated mid-JSON.
+
+    Heuristics:
+    - Contains '[' but no matching ']'
+    - Ends mid-string or mid-object (trailing quote, comma, colon, open brace)
+    - Bracket counting shows unclosed structures
+    """
+    stripped = raw.strip()
+    if not stripped:
+        return False
+
+    # Has opening bracket but no closing bracket
+    if "[" in stripped and "]" not in stripped:
+        return True
+
+    # Count unmatched brackets/braces
+    open_brackets = stripped.count("[") - stripped.count("]")
+    open_braces = stripped.count("{") - stripped.count("}")
+    if open_brackets > 0 or open_braces > 0:
+        return True
+
+    # Ends with characters that suggest mid-JSON truncation
+    if stripped[-1] in (",", ":", '"', "{"):
+        return True
+
+    return False
+
+
+def _salvage_truncated_json(raw: str) -> list | None:
+    """Try to salvage complete triple objects from truncated JSON.
+
+    Strategy: find all complete {"subject":...,"predicate":...,"object":...} objects
+    that appear before the truncation point.
+    """
+    # Find all complete JSON objects with the triple pattern
+    pattern = r'\{[^{}]*"subject"\s*:\s*"[^"]*"\s*,\s*"predicate"\s*:\s*"[^"]*"\s*,\s*"object"\s*:\s*"[^"]*"[^{}]*\}'
+    matches = re.findall(pattern, raw, re.DOTALL)
+    if not matches:
+        return None
+
+    salvaged = []
+    for m in matches:
+        try:
+            obj = json.loads(m)
+            salvaged.append(obj)
+        except json.JSONDecodeError:
+            continue
+
+    return salvaged if salvaged else None
+
+
+# =============================================================================
 # Extraction
 # =============================================================================
 
 def _parse_triples_response(raw: str) -> list[dict] | None:
     """Parse raw LLM response text into a list of triple dicts.
 
-    Returns None if parsing fails entirely.
+    Returns None if parsing fails entirely. If the response is truncated,
+    attempts to salvage any complete triple objects before the truncation point.
     """
+    global truncation_count
+
+    truncated = _is_truncated(raw)
+    parsed = None
+
     # Try direct JSON parse
     try:
         parsed = json.loads(raw)
@@ -195,8 +292,17 @@ def _parse_triples_response(raw: str) -> list[dict] | None:
             try:
                 parsed = json.loads(match.group())
             except json.JSONDecodeError:
-                return None
-        else:
+                pass
+
+        # If still no parse and truncated, try salvaging complete objects
+        if parsed is None and truncated:
+            truncation_count += 1
+            print(f"[triple_extraction] Truncated response detected (total: {truncation_count}), attempting salvage: ...{raw[-80:]}", file=sys.stderr)
+            parsed = _salvage_truncated_json(raw)
+            if parsed:
+                print(f"[triple_extraction] Salvaged {len(parsed)} complete triples from truncated response", file=sys.stderr)
+
+        if parsed is None:
             return None
 
     # Handle dict wrapper (e.g., {"triples": [...]})
@@ -231,10 +337,19 @@ def _parse_triples_response(raw: str) -> list[dict] | None:
 
 
 MAX_RETRIES = 2
+# Input character limits: first attempt and retry
+_INITIAL_MAX_CHARS = 1500
+_RETRY_MAX_CHARS = 1000
+_TRUNCATION_RETRY_MAX_CHARS = 800
 
 
 def extract_triples_gemini(model, text: str) -> list[dict]:
     """Extract knowledge triples from text using a Gemini model.
+
+    Handles three failure modes:
+    1. API errors — retry with shorter input
+    2. Truncated JSON — salvage complete triples, then retry with shorter input
+    3. Unparseable response — retry with shorter input
 
     Args:
         model: A vertexai GenerativeModel instance (from vertex_ai.get_gemini_model).
@@ -246,11 +361,11 @@ def extract_triples_gemini(model, text: str) -> list[dict]:
     if not text or len(text.strip()) < 30:
         return []
 
-    max_chars = 1500
+    max_chars = _INITIAL_MAX_CHARS
 
     for attempt in range(1 + MAX_RETRIES):
-        truncated = text[:max_chars]
-        prompt = build_extraction_prompt(truncated)
+        input_text = text[:max_chars]
+        prompt = build_extraction_prompt(input_text)
 
         try:
             response = model.generate_content(prompt)
@@ -258,19 +373,40 @@ def extract_triples_gemini(model, text: str) -> list[dict]:
         except Exception as e:
             print(f"[triple_extraction] API error (attempt {attempt + 1}): {e}", file=sys.stderr)
             if attempt < MAX_RETRIES:
-                max_chars = 1000  # shorter input on retry
+                max_chars = _RETRY_MAX_CHARS
                 continue
             return []
 
+        # Check for truncation before parsing
+        was_truncated = _is_truncated(raw)
+
         triples = _parse_triples_response(raw)
         if triples is not None:
+            if was_truncated:
+                print(f"[triple_extraction] Recovered {len(triples)} triples from truncated response (attempt {attempt + 1})", file=sys.stderr)
             return triples
 
-        # Parse failed — retry with shorter input
+        # Parse failed — determine retry strategy
         if attempt < MAX_RETRIES:
-            print(f"[triple_extraction] JSON parse failed (attempt {attempt + 1}), retrying with shorter input: {raw[:100]}", file=sys.stderr)
-            max_chars = 1000
+            if was_truncated:
+                # Truncation: use aggressively shorter input so output fits in token budget
+                max_chars = _TRUNCATION_RETRY_MAX_CHARS
+                print(f"[triple_extraction] Truncated JSON (attempt {attempt + 1}), retrying with {max_chars} chars: ...{raw[-80:]}", file=sys.stderr)
+            else:
+                max_chars = _RETRY_MAX_CHARS
+                print(f"[triple_extraction] JSON parse failed (attempt {attempt + 1}), retrying with shorter input: {raw[:100]}", file=sys.stderr)
         else:
             print(f"[triple_extraction] JSON parse failed after {attempt + 1} attempts: {raw[:200]}", file=sys.stderr)
 
     return []
+
+
+def get_truncation_count() -> int:
+    """Return the total number of truncation events detected during this run."""
+    return truncation_count
+
+
+def reset_truncation_count() -> None:
+    """Reset the truncation counter (e.g., at the start of a new pipeline run)."""
+    global truncation_count
+    truncation_count = 0

@@ -252,6 +252,13 @@ def main():
     g = build_graph(str(input_path), skip_extraction=args.skip_extraction, model=model)
 
     print(f"  Total RDF triples: {len(g)}", file=sys.stderr)
+
+    # Report truncation events if any occurred
+    from pipeline.triple_extraction import get_truncation_count
+    tc = get_truncation_count()
+    if tc > 0:
+        print(f"  Truncated responses: {tc} (salvaged where possible)", file=sys.stderr)
+
     print(f"  Writing to: {output_path}", file=sys.stderr)
 
     g.serialize(destination=str(output_path), format="turtle")

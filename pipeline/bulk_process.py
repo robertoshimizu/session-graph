@@ -29,12 +29,33 @@ OUTPUT_DIR = Path(__file__).resolve().parent.parent / "output" / "claude"
 WATERMARK_FILE = OUTPUT_DIR / "watermarks.json"
 
 
-def find_sessions(projects_dir: Path = CLAUDE_PROJECTS_DIR) -> list[Path]:
-    """Find all JSONL session files under the Claude projects directory."""
+def is_subagent_file(path: Path) -> bool:
+    """Check if a JSONL file is a subagent session (lives under a /subagents/ directory)."""
+    return "/subagents/" in str(path)
+
+
+def find_sessions(
+    projects_dir: Path = CLAUDE_PROJECTS_DIR,
+    include_subagents: bool = False,
+) -> list[Path]:
+    """Find all JSONL session files under the Claude projects directory.
+
+    Args:
+        projects_dir: Root directory to search.
+        include_subagents: If False (default), skip files under /subagents/ dirs
+            to avoid duplicate knowledge triples from overlapping context.
+    """
     if not projects_dir.exists():
         print(f"Warning: {projects_dir} does not exist", file=sys.stderr)
         return []
-    return sorted(projects_dir.rglob("*.jsonl"))
+    all_files = sorted(projects_dir.rglob("*.jsonl"))
+    if include_subagents:
+        return all_files
+    parent_sessions = [f for f in all_files if not is_subagent_file(f)]
+    skipped = len(all_files) - len(parent_sessions)
+    if skipped > 0:
+        print(f"Skipping {skipped} subagent files (use --include-subagents to include)", file=sys.stderr)
+    return parent_sessions
 
 
 def load_watermarks(watermark_path: Path = WATERMARK_FILE) -> dict:
@@ -109,10 +130,14 @@ def main():
         "--heuristic", action="store_true",
         help="Use heuristic entity linking instead of agentic",
     )
+    parser.add_argument(
+        "--include-subagents", action="store_true",
+        help="Include subagent session files (skipped by default to avoid duplicate triples)",
+    )
     args = parser.parse_args()
 
     # Find all sessions
-    all_sessions = find_sessions()
+    all_sessions = find_sessions(include_subagents=args.include_subagents)
     if not all_sessions:
         print("No JSONL sessions found.", file=sys.stderr)
         sys.exit(1)
