@@ -141,17 +141,31 @@ def poll_job(job_name: str, poll_interval: int = 30, max_wait: int = 1800) -> bo
     """Poll a batch job until completion or timeout."""
     from vertexai.batch_prediction import BatchPredictionJob
 
+    # Map numeric state values to names (google.cloud.aiplatform_v1.types.JobState)
+    _STATE_NAMES = {
+        0: "UNSPECIFIED", 1: "QUEUED", 2: "PENDING", 3: "RUNNING",
+        4: "SUCCEEDED", 5: "FAILED", 6: "CANCELLING", 7: "CANCELLED",
+        8: "PAUSED", 9: "EXPIRED", 10: "UPDATING", 11: "PARTIALLY_SUCCEEDED",
+    }
+
     elapsed = 0
     while elapsed < max_wait:
         job = BatchPredictionJob(job_name)
-        state = str(job.state)
-        print(f"  [{elapsed}s] Job state: {state}", file=sys.stderr)
+        raw_state = job.state
+        # Handle both enum objects and raw ints
+        try:
+            state_val = raw_state.value if hasattr(raw_state, "value") else int(raw_state)
+        except (TypeError, ValueError):
+            state_val = -1
+        state_name = _STATE_NAMES.get(state_val, str(raw_state))
 
-        if "SUCCEEDED" in state:
+        print(f"  [{elapsed}s] Job state: {state_name} ({state_val})", file=sys.stderr)
+
+        if state_val == 4 or "SUCCEEDED" in state_name:
             print(f"  Job completed successfully!", file=sys.stderr)
             return True
-        elif "FAILED" in state or "CANCELLED" in state:
-            print(f"  Job failed: {state}", file=sys.stderr)
+        elif state_val in (5, 7) or "FAILED" in state_name or "CANCELLED" in state_name:
+            print(f"  Job failed: {state_name}", file=sys.stderr)
             return False
 
         time.sleep(poll_interval)

@@ -839,9 +839,96 @@ pipeline/.entity_cache.db          # DELETED (wiped for clean re-linking)
 
 ---
 
-## Next Steps (Sprint 6 — Remaining)
+## Sprint 6 Session 3 (2026-02-16): Batch Pipeline via Vertex AI Batch Prediction API
 
-1. **P0**: Commit all changes (Sprint 6 sessions 1+2) — 5+ files modified
-2. **P0**: Process ALL 594 Claude Code sessions with gemini-2.5-flash (bulk_process.py)
+### What Was Built
 
-load in graphdatabse such as neo4j and develop a hybrid approach are out of scope.
+- [x] **`pipeline/bulk_batch.py`** (~350 lines) — 3-subcommand batch pipeline: `submit` → `status` → `collect`
+- [x] **GCS bucket** `gs://devkg-batch-predictions` created in `us-central1`
+- [x] **`output/batch_jobs/.gitkeep`** — directory for job manifests
+
+### E2E Test (1 session, 13 messages)
+
+| Step | Result |
+|------|--------|
+| `submit --limit 2` | 13 messages → GCS → Vertex AI batch job |
+| `status --wait` | PENDING → QUEUED → RUNNING → SUCCEEDED (~8.5 min) |
+| `collect` | 150 knowledge triples, 131 entities → `.ttl` |
+| Entity linking | 62/130 linked (47.7%), 11 dedup pairs |
+| Fuseki load | 2,457 triples |
+
+### Bugs Found and Fixed
+
+1. **Metadata serialization** — Vertex AI Batch Prediction rejects nested JSON objects in metadata field. Fixed: serialize metadata dict to JSON string, deserialize on collect.
+2. **`poll_job` state enum mismatch** — `str(job.state)` returned raw int (e.g., `"5"`) not enum name. `"SUCCEEDED" in "5"` never matched → infinite polling. Fixed: use `job.state.value` with numeric comparison against `JobState` enum values.
+
+### Scale Estimate for Full Run
+
+| Metric | Value |
+|--------|-------|
+| Total sessions (excl. subagents) | 610 |
+| Already watermarked | 10 |
+| Pending | 600 |
+| Est. assistant messages | ~6,060 |
+| Est. batch JSONL size | ~18 MB (limit: 10 GB) |
+| Largest session | 36 MB JSONL → 41 assistant messages |
+
+### Critical Analysis: Ready for Full Run?
+
+**Go / No-Go Assessment:**
+
+| Concern | Status | Detail |
+|---------|--------|--------|
+| Batch API works | ✅ | Tested E2E with real data |
+| Metadata serialization | ✅ | Fixed (JSON string) |
+| State polling | ✅ | Fixed (numeric enum) |
+| Subagent filtering | ✅ | 1,022 subagents filtered |
+| Empty sessions | ✅ | `build_graph` handles gracefully (34 structural triples) |
+| Large sessions (36MB) | ✅ | Only 41 assistant messages, text truncated to 1500 chars |
+| Batch size limits | ✅ | 18 MB << 10 GB limit |
+| `max_output_tokens` | ✅ | Set to 8192 (was 4096 in old `batch_extraction.py`) |
+| Collect idempotency | ⚠️ | **Watermarks updated per-session during collect — if collect crashes mid-way, partial progress is saved but batch output must be re-downloaded** |
+| Entity linking at scale | ⚠️ | **~6K entities × ~5s/entity = ~8 hours for agentic linking. Consider `--skip-linking` on first run, link separately.** |
+| Cost | ✅ | Batch API = 50% discount. ~6K requests × $0.0001 ≈ $0.60 |
+
+**Recommendation:** Ready for full run. Use `submit` without `--limit`, then `status --wait`, then `collect` (without `--link` first). Run entity linking separately after.
+
+### Files Created/Modified
+
+```
+pipeline/bulk_batch.py             # NEW: 3-subcommand batch pipeline (~350 lines)
+pipeline/batch_extraction.py       # MODIFIED: fixed poll_job state enum handling
+output/batch_jobs/.gitkeep         # NEW: directory for manifests
+output/batch_jobs/20260215_*.json  # Test manifests (2 runs)
+```
+
+### How to Run (Full Pipeline)
+
+```bash
+# 1. Submit all 600 sessions
+.venv/bin/python -m pipeline.bulk_batch submit
+
+# 2. Wait for completion (~10-20 min for batch)
+.venv/bin/python -m pipeline.bulk_batch status --wait --poll-interval 60
+
+# 3. Collect results (without entity linking)
+.venv/bin/python -m pipeline.bulk_batch collect
+
+# 4. Entity linking (separate, slower step)
+PYTHONUNBUFFERED=1 .venv/bin/python -m pipeline.link_entities \
+  --input output/claude/*.ttl --output output/claude/wikidata_links.ttl
+
+# 5. Load into Fuseki
+.venv/bin/python pipeline/load_fuseki.py output/claude/*.ttl
+```
+
+---
+
+## Next Steps
+
+1. **P0**: Commit all Sprint 6 changes
+2. **P0**: Run full batch pipeline (600 sessions)
+3. **P1**: Entity linking on all extracted entities
+4. **P1**: Load everything into Fuseki, run hub detection + cross-session overlap queries
+
+Neo4j migration and hybrid vector retrieval are out of scope.

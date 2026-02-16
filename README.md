@@ -16,6 +16,7 @@ A unified developer knowledge graph that extracts structured `(subject, predicat
 - [Entity Disambiguation Strategy](#entity-disambiguation-strategy)
 - [Ontology Reference](#ontology-reference)
 - [Sprint 5 — SPARQL Skill + Wikidata Traversal (2026-02-15)](#sprint-5--sparql-skill--wikidata-traversal-2026-02-15)
+- [Sprint 6 — Batch Pipeline + Scale Preparation (2026-02-15/16)](#sprint-6--batch-pipeline--scale-preparation-2026-02-1516)
 - [Parking Lot](#parking-lot)
 - [Lessons Learned](#lessons-learned)
 
@@ -102,7 +103,7 @@ pip install -r requirements.txt
 # GOOGLE_CLOUD_PROJECT=<your-project-id>
 ```
 
-### Run Pipeline
+### Run Pipeline (Single Session)
 
 ```bash
 # Full extraction (Gemini 2.5 Flash)
@@ -110,9 +111,33 @@ pip install -r requirements.txt
 
 # Skip extraction (structure only — no API calls)
 .venv/bin/python -m pipeline.jsonl_to_rdf <input.jsonl> output/<name>.ttl --skip-extraction
+```
 
-# Custom model
-.venv/bin/python -m pipeline.jsonl_to_rdf <input.jsonl> output/<name>.ttl --model gemini-2.5-pro
+### Run Pipeline (Batch — All Sessions, 50% Cost Reduction)
+
+```bash
+# Step 1: Submit all unprocessed sessions to Vertex AI Batch Prediction
+.venv/bin/python -m pipeline.bulk_batch submit
+
+# Step 2: Wait for completion (~10-20 min)
+.venv/bin/python -m pipeline.bulk_batch status --wait --poll-interval 60
+
+# Step 3: Collect results → RDF Turtle files
+.venv/bin/python -m pipeline.bulk_batch collect
+
+# Step 4: Entity linking (Wikidata, separate step)
+PYTHONUNBUFFERED=1 .venv/bin/python -m pipeline.link_entities \
+  --input output/claude/*.ttl --output output/claude/wikidata_links.ttl
+
+# Step 5: Load into Fuseki
+.venv/bin/python pipeline/load_fuseki.py output/claude/*.ttl
+```
+
+### Run Pipeline (Synchronous — One-at-a-Time)
+
+```bash
+# Processes sessions sequentially with real-time Gemini calls
+.venv/bin/python -m pipeline.bulk_process --limit 10
 ```
 
 ### Load into Fuseki
@@ -149,9 +174,18 @@ dev-knowledge-graph/
 │   ├── vertex_ai.py                 # Vertex AI auth (base64 credentials → temp file)
 │   ├── triple_extraction.py         # Ontologist prompt + Gemini extraction + normalization
 │   ├── jsonl_to_rdf.py              # Claude Code JSONL → RDF Turtle (main pipeline)
-│   ├── link_entities.py             # Wikidata entity linking (prototype)
+│   ├── bulk_process.py              # Synchronous bulk processing (all sessions)
+│   ├── bulk_batch.py                # Batch pipeline via Vertex AI Batch Prediction API
+│   ├── batch_extraction.py          # Batch prediction helpers (GCS upload, job polling)
+│   ├── link_entities.py             # Wikidata entity linking (agentic LangGraph)
+│   ├── agentic_linker_langgraph.py  # ReAct agent for entity disambiguation
+│   ├── common.py                    # Shared RDF logic (namespaces, URI helpers)
+│   ├── deepseek_to_rdf.py           # DeepSeek JSON → RDF
+│   ├── grok_to_rdf.py               # Grok JSON → RDF
+│   ├── warp_to_rdf.py               # Warp SQLite → RDF
 │   ├── load_fuseki.py               # Upload Turtle to Fuseki
-│   └── sample_queries.sparql        # 8 SPARQL queries (structural + semantic)
+│   ├── entity_aliases.json          # 161 tech synonym mappings
+│   └── sample_queries.sparql        # 14 SPARQL queries (structural + semantic)
 │
 ├── external_knowledge/
 │   ├── deepseek_data-2026-01-28.zip # DeepSeek export (42 conversations)
@@ -171,6 +205,8 @@ dev-knowledge-graph/
 │   └── evaluate.py
 │
 ├── output/
+│   ├── claude/                      # Per-session .ttl files + wikidata_links.ttl
+│   ├── batch_jobs/                  # Batch prediction manifests
 │   ├── test_triples.ttl             # Sprint 2 output (2,185 triples)
 │   ├── ec11ec1e.ttl                 # Sprint 1 output (research session)
 │   └── ddxplus.ttl                  # Sprint 1 output (medical session)
@@ -450,6 +486,101 @@ Fosfomycin `owl:sameAs` corrected: Q421268 (tubocurarine — wrong!) → Q183554
 
 ---
 
+## Sprint 6 — Batch Pipeline + Scale Preparation (2026-02-15/16)
+
+### Problem
+
+The synchronous pipeline (`bulk_process.py`) makes one Gemini API call per assistant message, sequentially. For 610 sessions (~6,060 messages), this is slow and full-price. The Vertex AI Batch Prediction API offers 50% cost reduction and processes all requests in a single async job.
+
+### What Was Built
+
+**`pipeline/bulk_batch.py`** — a decoupled 3-step batch pipeline:
+
+| Step | Command | What It Does |
+|------|---------|--------------|
+| **submit** | `bulk_batch submit` | Extracts assistant messages from JSONL → builds batch JSONL → uploads to GCS → submits Vertex AI batch job |
+| **status** | `bulk_batch status --wait` | Polls job state until SUCCEEDED/FAILED |
+| **collect** | `bulk_batch collect` | Downloads output shards from GCS → parses Gemini responses → injects triples into RDF graphs → writes `.ttl` files → updates watermarks |
+
+Each run creates a manifest file in `output/batch_jobs/` tracking job state, input/output URIs, session mapping, and results.
+
+### Architecture
+
+```
+610 sessions                    Vertex AI Batch Prediction
+───────────                     ──────────────────────────
+~/.claude/projects/**/*.jsonl
+    │
+    ▼
+extract_messages_from_jsonl()   ← reads raw JSONL, extracts assistant text
+    │
+    ▼
+build_batch_jsonl()             ← builds {request + metadata} per message
+    │
+    ▼
+upload_to_gcs()                 ← gs://devkg-batch-predictions/devkg/input_*.jsonl
+    │
+    ▼
+submit_batch_job()              ← Vertex AI processes all ~6K requests async
+    │                              (50% cheaper than real-time)
+    ▼
+poll_job()                      ← PENDING → QUEUED → RUNNING → SUCCEEDED
+    │
+    ▼
+download_and_parse_batch_output()  ← downloads output shards from GCS
+    │
+    ▼
+build_graph(skip_extraction=True)  ← creates RDF structure (sessions, messages, tools)
+    │
+    ▼
+add_triples_to_graph()          ← injects batch-extracted triples per message
+    │
+    ▼
+output/claude/<session>.ttl     ← combined structure + knowledge triples
+```
+
+### E2E Test Results (1 session, 13 messages)
+
+| Metric | Value |
+|--------|-------|
+| Batch job duration | ~8.5 min |
+| Knowledge triples extracted | 150 |
+| Entities | 131 |
+| Wikidata links | 62 (47.7%) |
+| Deduplicated entity pairs | 11 |
+| Total RDF triples | 2,457 (structure + knowledge + Wikidata) |
+
+### Bugs Found and Fixed
+
+1. **Metadata serialization** — Vertex AI Batch Prediction only accepts scalar metadata types (STRING, INTEGER, etc.), not nested JSON objects. The error message: `"The column or property 'metadata' in the specified input data is of unsupported type."` Fix: serialize metadata dict to a JSON string, deserialize on collect.
+
+2. **`poll_job` state enum mismatch** — `str(job.state)` returned the raw integer value (e.g., `"5"`) not the enum name (`"JOB_STATE_FAILED"`). The check `"SUCCEEDED" in "5"` never matched, causing infinite polling. The first job actually failed (metadata issue) but the poller ran for 30 minutes before timing out. Fix: use `job.state.value` with numeric comparison against the `JobState` enum (`4=SUCCEEDED`, `5=FAILED`).
+
+### Scale Assessment for Full Run
+
+| Metric | Value |
+|--------|-------|
+| Sessions to process | 600 (10 already watermarked) |
+| Subagent files filtered | 1,022 |
+| Estimated assistant messages | ~6,060 |
+| Estimated batch JSONL size | ~18 MB |
+| Vertex AI batch limit | 10 GB |
+| Estimated cost | ~$0.60 (batch 50% discount) |
+| Sessions with no assistant messages | ~14% (handled gracefully) |
+| Largest session | 36 MB JSONL → only 41 assistant messages |
+
+### Critical Analysis: Remaining Risks
+
+| Risk | Severity | Mitigation |
+|------|----------|------------|
+| **Entity linking speed** | Medium | ~6K entities × ~5s = ~8h. Run separately with `--skip-linking`, then `link_entities.py` |
+| **Collect crash mid-way** | Low | Watermarks saved per-session. Re-run `collect` resumes from where it stopped. Batch output stays in GCS. |
+| **Truncated Gemini responses** | Low | `max_output_tokens=8192` + salvage logic in `_parse_triples_response()`. ~5% truncation rate expected. |
+| **Batch job timeout** | Low | Default `max_wait=1800s` (30 min). For 6K requests, job may need longer. Use `--poll-interval 120` and re-run `status --wait` if timeout occurs. |
+| **GCS costs** | Negligible | ~18 MB input + ~18 MB output. Well under free tier. |
+
+---
+
 ## Parking Lot
 
 | # | Item | Status | Description |
@@ -462,10 +593,11 @@ Fosfomycin `owl:sameAs` corrected: Q421268 (tubocurarine — wrong!) → Q183554
 | 6 | ~~**Wikidata linking**~~ | **Done (Sprint 3-4)** | Agentic LangGraph linker, 120 links at 33% rate |
 | 7 | ~~**Per-platform parsers**~~ | **Done (Sprint 3)** | DeepSeek, Grok, Warp parsers |
 | 8 | ~~**Retry logic**~~ | **Done (Sprint 3)** | MAX_RETRIES=2 in triple extraction |
-| 9 | **Neo4j migration** | Open | Import RDF via n10s, Cypher + vector search |
-| 10 | **Vector embeddings** | Open | Embeddings on `sioc:content` for hybrid retrieval |
-| 11 | **Subagent deduplication** | Open | 76% triple duplication from overlapping subagent files |
-| 12 | **Bulk processing (all sessions)** | Open | Only 13 of 1,542 sessions processed |
+| 9 | **Neo4j migration** | Out of scope | Import RDF via n10s, Cypher + vector search |
+| 10 | **Vector embeddings** | Out of scope | Embeddings on `sioc:content` for hybrid retrieval |
+| 11 | ~~**Subagent deduplication**~~ | **Done (Sprint 6)** | `find_sessions()` filters 1,022 subagent files |
+| 12 | ~~**Batch processing**~~ | **Done (Sprint 6)** | Vertex AI Batch Prediction pipeline, tested E2E |
+| 13 | **Full run (600 sessions)** | Ready | Pipeline tested, scale validated, awaiting execution |
 
 ---
 
