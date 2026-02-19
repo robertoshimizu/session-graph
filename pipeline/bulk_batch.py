@@ -293,7 +293,7 @@ def cmd_submit(args):
     init_vertex()
 
     # Find sessions to process
-    all_sessions = find_sessions()
+    all_sessions = find_sessions(sort=getattr(args, "sort", "name"))
     if not all_sessions:
         print("No JSONL sessions found.", file=sys.stderr)
         sys.exit(1)
@@ -551,6 +551,8 @@ def main():
     sub.add_argument("--force", action="store_true", help="Reprocess all sessions regardless of watermarks")
     sub.add_argument("--model", default=None, help=f"Model name (default: {DEFAULT_MODEL})")
     sub.add_argument("--bucket", default=None, help=f"GCS bucket (default: {DEFAULT_BUCKET})")
+    sub.add_argument("--sort", choices=["name", "newest", "oldest"], default="name",
+                     help="Sort order for sessions: name (alphabetical, default), newest, or oldest")
 
     # status
     sub = subparsers.add_parser("status", help="Check batch job status")

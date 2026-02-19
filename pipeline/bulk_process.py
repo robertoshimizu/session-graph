@@ -37,6 +37,7 @@ def is_subagent_file(path: Path) -> bool:
 def find_sessions(
     projects_dir: Path = CLAUDE_PROJECTS_DIR,
     include_subagents: bool = False,
+    sort: str = "name",
 ) -> list[Path]:
     """Find all JSONL session files under the Claude projects directory.
 
@@ -44,18 +45,25 @@ def find_sessions(
         projects_dir: Root directory to search.
         include_subagents: If False (default), skip files under /subagents/ dirs
             to avoid duplicate knowledge triples from overlapping context.
+        sort: Sort order — "name" (default, alphabetical), "newest" (most
+            recently modified first), or "oldest" (least recently modified first).
     """
     if not projects_dir.exists():
         print(f"Warning: {projects_dir} does not exist", file=sys.stderr)
         return []
-    all_files = sorted(projects_dir.rglob("*.jsonl"))
-    if include_subagents:
-        return all_files
-    parent_sessions = [f for f in all_files if not is_subagent_file(f)]
-    skipped = len(all_files) - len(parent_sessions)
-    if skipped > 0:
-        print(f"Skipping {skipped} subagent files (use --include-subagents to include)", file=sys.stderr)
-    return parent_sessions
+    all_files = list(projects_dir.rglob("*.jsonl"))
+    if not include_subagents:
+        skipped = sum(1 for f in all_files if is_subagent_file(f))
+        all_files = [f for f in all_files if not is_subagent_file(f)]
+        if skipped > 0:
+            print(f"Skipping {skipped} subagent files (use --include-subagents to include)", file=sys.stderr)
+    if sort == "newest":
+        all_files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    elif sort == "oldest":
+        all_files.sort(key=lambda p: p.stat().st_mtime)
+    else:
+        all_files.sort()
+    return all_files
 
 
 def load_watermarks(watermark_path: Path = WATERMARK_FILE) -> dict:
@@ -134,10 +142,14 @@ def main():
         "--include-subagents", action="store_true",
         help="Include subagent session files (skipped by default to avoid duplicate triples)",
     )
+    parser.add_argument(
+        "--sort", choices=["name", "newest", "oldest"], default="name",
+        help="Sort order for sessions: name (alphabetical, default), newest, or oldest",
+    )
     args = parser.parse_args()
 
     # Find all sessions
-    all_sessions = find_sessions(include_subagents=args.include_subagents)
+    all_sessions = find_sessions(include_subagents=args.include_subagents, sort=args.sort)
     if not all_sessions:
         print("No JSONL sessions found.", file=sys.stderr)
         sys.exit(1)
