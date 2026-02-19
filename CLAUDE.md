@@ -145,579 +145,31 @@ ex:concept-supabase-auth a skos:Concept ;
     skos:related ex:concept-jwt .
 ```
 
-## Cost Analysis
+## Ontology: Predicate Vocabulary & Custom Classes
 
-| Component            | Tool                                                 | Cost           |
-| -------------------- | ---------------------------------------------------- | -------------- |
-| Graph DB             | Neo4j Community (Docker) or AuraDB Free              | $0             |
-| KG framework         | Cognee or Graphiti (open source)                     | $0             |
-| Code parsing         | tree-sitter + CodeGraph                              | $0             |
-| Conversation parsing | claude-code-log, chatgpt-exporter, cursor-history    | $0             |
-| Orchestration        | LangChain + LangGraph                                | $0             |
-| Embeddings           | Ollama (nomic-embed-text, local)                     | $0             |
-| LLM extraction       | Ollama (llama3/deepseek, local) or Claude via Vertex | $0 or API cost |
+### Custom Classes
 
-## Reference Projects
+- `devkg:Entity` (subclass of `prov:Entity`) — extracted technical concepts
+- `devkg:KnowledgeTriple` — reified triple for provenance (links to source message + session)
+- `devkg:Project` — software project with working directory and source files
 
-- **GRAPH4CODE** (IBM Research): 2B triples, composes Schema.org + SKOS + PROV-O + SIOC + SIO
-- **Cognee repo-to-knowledge-graph**: `cognee.ai/blog/deep-dives/repo-to-knowledge-graph`
-- **Graphiti MCP server**: `github.com/getzep/graphiti` (temporal KG for agent memory)
-- **Neo4j LLM Knowledge Graph Builder**: Docker-based, extracts KG from PDFs/web/YouTube
-- **Zimin Chen's "Building KG over a Codebase for LLM"**: Neo4j + AST nodes + Cypher queries
+### Curated Predicate Vocabulary (24 OWL ObjectProperties)
 
-## Sprint 1 Results (2026-02-13)
+Closed-world design: the LLM is instructed to use ONLY these predicates. A normalization step maps any LLM-generated predicate to the closest match (fallback: `relatedTo`).
 
-### What Was Built
-
-- [x] OWL ontology composing PROV-O + SIOC + SKOS + DC + Schema.org → `ontology/devkg.ttl`
-- [x] rdflib pipeline: JSONL → RDF Turtle → Fuseki → SPARQL → `pipeline/jsonl_to_rdf.py`
-- [x] 3,006 triples loaded into Apache Jena Fuseki (2 sessions, 78 tool calls, 103 topics)
-- [x] Cognee evaluation → rejected (no RDF output, slow, ontology mismatch)
-
-### Critical Failure: Flat Tags Instead of Knowledge Triples
-
-The pipeline extracts `["Prolog", "Symbolic AI"]` as independent tags per message. It CANNOT answer relationship questions like "how does Prolog fit into neurosymbolic?" because no `(subject, predicate, object)` triples are stored. **A knowledge graph without relationships is just a tag cloud.**
-
-See `README.md` for full post-mortem, multi-platform assessment, and action items.
-
-### Files (Sprint 1 — superseded by Sprint 2)
-
-```
-ontology/devkg.ttl              # OWL ontology (extended in Sprint 2)
-pipeline/jsonl_to_rdf.py        # JSONL → RDF (flat tags — FIXED in Sprint 2)
-pipeline/load_fuseki.py         # Upload Turtle to Fuseki
-pipeline/sample_queries.sparql  # 5 structural SPARQL queries (extended in Sprint 2)
-cognee_eval/EVALUATION.md       # Cognee evaluation report
-cognee_eval/ingest.py           # Cognee ingestion script
-cognee_eval/evaluate.py         # Cognee graph inspection
-output/ec11ec1e.ttl             # RDF output (research session, flat tags only)
-output/ddxplus.ttl              # RDF output (medical session, flat tags only)
-README.md                       # Project documentation (includes Sprint 1 post-mortem)
-```
-
-## Sprint 2 Results (2026-02-14)
-
-### What Was Built
-
-- [x] **P0 FIXED**: Replaced flat topic extraction with `(subject, predicate, object)` triple extraction
-- [x] **P0 FIXED**: Added 3 semantic verification SPARQL queries (Queries 6-8) as acceptance criteria
-- [x] Replaced Ollama llama3 with **Gemini 2.5 Flash on Vertex AI** (uses existing GCP credits)
-- [x] Defined **curated predicate vocabulary** (24 OWL ObjectProperties) in ontology
-- [x] Ontologist prompt with few-shot examples + closed-world predicate enforcement
-- [x] Entity normalization (lowercase, dedup, predicate fuzzy matching)
-- [x] Dual storage: direct edges (fast traversal) + reified KnowledgeTriple nodes (provenance)
-
-### Sprint 1 → Sprint 2 Comparison
-
-| Metric                    | Sprint 1 (flat tags)  | Sprint 2 (knowledge triples) |
-| ------------------------- | --------------------- | ---------------------------- |
-| Total RDF triples         | 3,006 (2 sessions)    | 2,185 (1 session)            |
-| Knowledge relationships   | **0**                 | **128**                      |
-| Distinct entities         | N/A (flat tags)       | **120**                      |
-| Predicates used           | 0                     | **18 of 24**                 |
-| "How does X relate to Y?" | **Cannot answer**     | **Works with provenance**    |
-| LLM backend               | Ollama llama3 (local) | Gemini 2.5 Flash (Vertex AI) |
-
-### Predicate Distribution
-
-```
-19x  uses            9x  hasPart          3x  relatedTo
-17x  servesAs        9x  enables          3x  produces
-16x  isTypeOf        8x  provides         2x  requires
-16x  integratesWith  7x  solves           2x  isPartOf
- 6x  deployedOn      4x  alternativeTo    2x  broader
- 3x  composesWith    1x  storesIn         1x  queriedWith
-```
-
-### Sample Knowledge Triples (impossible in Sprint 1)
-
-```
-myconnect      --alternativeTo-->  ngrok
-myconnect      --enables-->        healthcare erp integration
-myconnect      --solves-->         exposing service behind firewall
-myconnect      --uses-->           websocket
-rock pi #1     --deployedOn-->     hospital dmz
-tunnel         --enables-->        sql queries
-tunnel         --integratesWith--> oracle database
-oracle database--deployedOn-->     on-premises
-ngrok          --enables-->        tunneling local services
-```
-
-### Ontology Extension: Curated Predicate Vocabulary
-
-The key design decision: define a **closed-world predicate vocabulary** as first-class OWL ObjectProperties, not ad-hoc strings. The LLM is instructed to use ONLY these predicates. A normalization step maps any LLM-generated predicate to the closest match (fallback: `relatedTo`).
-
-**24 predicates defined**, mapped to standards where possible:
+**Standard-mapped predicates:**
 
 - `devkg:isPartOf` → `rdfs:subPropertyOf dcterms:isPartOf`
 - `devkg:hasPart` → `rdfs:subPropertyOf dcterms:hasPart`
 - `devkg:broader` → `rdfs:subPropertyOf skos:broader`
 - `devkg:narrower` → `rdfs:subPropertyOf skos:narrower`
 - `devkg:relatedTo` → `rdfs:subPropertyOf skos:related`
-- 19 custom predicates: `uses`, `dependsOn`, `enables`, `implements`, `extends`, `alternativeTo`, `solves`, `produces`, `configures`, `composesWith`, `provides`, `requires`, `isTypeOf`, `builtWith`, `deployedOn`, `storesIn`, `queriedWith`, `integratesWith`, `servesAs`
 
-### New Classes
+**Custom predicates (19):** `uses`, `dependsOn`, `enables`, `implements`, `extends`, `alternativeTo`, `solves`, `produces`, `configures`, `composesWith`, `provides`, `requires`, `isTypeOf`, `builtWith`, `deployedOn`, `storesIn`, `queriedWith`, `integratesWith`, `servesAs`
 
-- `devkg:Entity` (subclass of `prov:Entity`) — extracted technical concepts
-- `devkg:KnowledgeTriple` — reified triple for provenance (links to source message + session)
+**Additional properties:** `devkg:hasSourceFile`, `devkg:belongsToProject`, `devkg:hasWorkingDirectory`
 
-### Files
-
-```
-ontology/devkg.ttl              # Extended: +Entity, +KnowledgeTriple, +24 predicates (398 lines)
-pipeline/vertex_ai.py           # NEW: Vertex AI auth (base64 creds → temp file → init)
-pipeline/triple_extraction.py   # NEW: Ontologist prompt, extraction, normalization (224 lines)
-pipeline/jsonl_to_rdf.py        # Refactored: Gemini triples replace Ollama tags (330 lines)
-pipeline/load_fuseki.py         # Unchanged
-pipeline/sample_queries.sparql  # Extended: +3 semantic queries (Queries 6-8)
-requirements.txt                # Updated: +google-cloud-aiplatform, -cognee
-output/test_triples.ttl         # Sprint 2 output (2,185 triples)
-```
-
-### How to Run
-
-```bash
-# Start Fuseki
-cd ~/opt/apache-jena-fuseki && ./fuseki-server &
-
-# Full extraction (Gemini 2.5 Flash via Vertex AI)
-.venv/bin/python -m pipeline.jsonl_to_rdf <input.jsonl> output/<name>.ttl
-
-# Structure only (no API calls)
-.venv/bin/python -m pipeline.jsonl_to_rdf <input.jsonl> output/<name>.ttl --skip-extraction
-
-# Custom model
-.venv/bin/python -m pipeline.jsonl_to_rdf <input.jsonl> output/<name>.ttl --model gemini-2.5-pro
-
-# Load into Fuseki
-.venv/bin/python pipeline/load_fuseki.py output/<name>.ttl
-
-# Query at http://localhost:3030
-```
-
-### Verification Queries (Queries 6-8)
-
-```sparql
-# Query 6: What relationships exist for entity X?
-# → Returns all predicates + objects for a given entity, with source message provenance
-
-# Query 7: How does entity X relate to entity Y?
-# → Returns predicates connecting two specific entities, with source text
-
-# Query 8: Entity co-occurrence
-# → Counts how often entity pairs appear together across triples
-```
-
-### Known Issues
-
-- ~5% of Gemini responses truncate mid-JSON (long outputs) — extraction gracefully returns `[]`. A retry mechanism would help.
-- `vertexai` SDK deprecation warning (cosmetic, won't affect until June 2026)
-- Some noisy entities slip through (`/exit`, `command name`) — could add a stopword filter
-
-## Sprint 2.5 Results (2026-02-14): Wikidata Entity Linking
-
-### What Was Built
-
-- [x] **Comprehensive Wikidata research** (`research/wikidata_entity_linking_research.md`)
-  - API documentation (wbsearchentities, wbgetentities, SPARQL)
-  - Coverage analysis (8/9 major developer tools found in Wikidata)
-  - Python library comparison (qwikidata, WikidataIntegrator, spaCyOpenTapioca)
-  - Integration architecture (post-processing vs real-time)
-  - Rate limits and best practices
-
-- [x] **Entity linking script** (`pipeline/link_entities.py`)
-  - Wikidata search API integration (qwikidata + direct API calls)
-  - Tech keyword disambiguation heuristic (prefers software/database/framework in description)
-  - RDF output with owl:sameAs triples
-  - Rate limiting (1 req/sec + User-Agent header)
-
-- [x] **Proof of concept validated** (3/3 entities successfully linked)
-
-**Test Results:**
-
-```
-Neo4j    → Q1628290 ✅ (graph database management system implemented in Java)
-Python   → Q28865 ✅ (general-purpose programming language)
-React    → Q19399674 ✅ (JavaScript library for building user interfaces)
-```
-
-**Ambiguity Detection Working:**
-
-- Neo4j: 4 candidates → selected Q1628290 (database), not Q107381824 (Python library)
-- React: 2 candidates → selected Q19399674 (JS library), not Q2134522 (chemical)
-
-### Wikidata Coverage Assessment
-
-| Entity                 | QID        | Status  | Description                                                            |
-| ---------------------- | ---------- | ------- | ---------------------------------------------------------------------- |
-| **Neo4j**              | Q1628290   | ✅      | graph database management system implemented in Java                   |
-| **Kubernetes**         | Q22661306  | ✅      | software to manage containers on a server-cluster                      |
-| **Visual Studio Code** | Q19841877  | ✅      | source code editor developed by Microsoft                              |
-| **FastAPI**            | Q101119404 | ✅      | software framework for developing web applications in Python           |
-| **Pydantic**           | Q107381687 | ✅      | Python library for data parsing and validation using Python type hints |
-| **Apache Jena**        | Q1686799   | ✅      | open source semantic web framework for Java                            |
-| **SPARQL**             | Q54871     | ✅      | RDF query language                                                     |
-| **Supabase**           | Q136776342 | ✅      | open source backend platform for app development                       |
-| **Docker**             | ❌         | Missing | (returns "stevedore" occupation instead)                               |
-
-**Coverage:** 88% of major developer tools
-
-### Example RDF Output
-
-```turtle
-@prefix dcterms: <http://purl.org/dc/terms/> .
-@prefix devkg: <http://devkg.local/> .
-@prefix owl: <http://www.w3.org/2002/07/owl#> .
-@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
-@prefix wd: <http://www.wikidata.org/entity/> .
-
-devkg:Neo4j rdfs:label "Neo4j"@en ;
-    dcterms:description "graph database management system implemented in Java"@en ;
-    owl:sameAs wd:Q1628290 .
-```
-
-### Usage
-
-```bash
-# Create entity list
-cat > entities.txt <<EOF
-Neo4j
-Kubernetes
-Visual Studio Code
-EOF
-
-# Run linking
-python pipeline/link_entities.py entities.txt output.ttl
-
-# Load into Fuseki
-python pipeline/load_fuseki.py output.ttl
-```
-
-### Files
-
-```
-research/wikidata_entity_linking_research.md  # Full research (16,000+ words)
-research/IMPLEMENTATION_SUMMARY.md            # Quick reference guide
-pipeline/link_entities.py                     # Entity linking script
-test/quick_links.ttl                           # Validated RDF output
-```
-
----
-
-## Sprint 3 Results (2026-02-14): Multi-Platform Pipeline + Entity Linking
-
-### What Was Built
-
-- [x] **Ontology extensions**: `devkg:Project`, `devkg:hasSourceFile`, `devkg:belongsToProject`, `devkg:hasWorkingDirectory`
-- [x] **Shared module** (`pipeline/common.py`, 219 lines): Namespace constants, URI helpers, RDF node builders — used by all 5 parsers
-- [x] **DeepSeek parser** (`pipeline/deepseek_to_rdf.py`, 370 lines): JSON zip with tree-structured mapping
-- [x] **Grok parser** (`pipeline/grok_to_rdf.py`, 267 lines): MongoDB JSON with `$date.$numberLong` timestamps
-- [x] **Warp parser** (`pipeline/warp_to_rdf.py`, 313 lines): SQLite with `ai_queries` table. Only useful when sessions have bulk content; most Warp AI sessions are too thin (user queries only, no assistant responses stored)
-- [x] **Retry logic** in `triple_extraction.py`: MAX_RETRIES=2, shorter input on retry
-- [x] **Enhanced entity linking** (`pipeline/link_entities.py`, 422 lines): SQLite cache, batch mode from .ttl files, 31 alias mappings
-- [x] **Batch extraction skeleton** (`pipeline/batch_extraction.py`, 252 lines): Gemini Batch Prediction via GCS
-- [x] **Automation skeletons**: `hooks/post_session_hook.sh`, `daemon/sync_daemon.py`
-- [x] **SPARQL queries 9-14**: Cross-platform verification
-- [x] **Refactored `jsonl_to_rdf.py`**: imports from common.py, hasSourceFile + Project detection
-
-### Integration Results
-
-| Platform    | Messages | Knowledge Triples | Notes                         |
-| ----------- | -------- | ----------------- | ----------------------------- |
-| Claude Code | 55       | 180               | Full session with tool calls  |
-| DeepSeek    | 8        | 111               | MCP integration conversation  |
-| Grok        | 14       | 165               | Medical diagnosis logic       |
-| Warp        | 12       | 3                 | User queries only (thin data) |
-
-- **7,462 total RDF triples** loaded in Fuseki
-- **233 Wikidata owl:sameAs links** (51.8% of 450 entities)
-- **8 cross-platform entities**: api, server, python, database, client, http, go, db
-- **Federated SPARQL → Wikidata** verified working (e.g., "What is Python?" returns Wikidata description + local KG relationships)
-
-### Agentic Entity Linking (Sprint 3.5)
-
-Replaced naive heuristic entity linker with **ReAct agent** using LLM + Wikidata API tool:
-
-| Approach            | Precision | Avg Latency | Notes                                  |
-| ------------------- | --------- | ----------- | -------------------------------------- |
-| Heuristic (old)     | ~50%      | <1s         | Keyword matching, many false positives |
-| Agentic (ADK)       | 7/7       | 4.7s        | Google ADK, text parsing (fragile)     |
-| Agentic (LangGraph) | 7/7       | 4.3s        | LangGraph + structured output (robust) |
-
-**Winner: LangGraph** — same precision as ADK, but native structured output (`response_format=WikidataMatch`) eliminates parsing failures. In fair ceteris paribus test, ADK failed 3/7 due to regex parsing of free-text output.
-
-Key capability: **ReAct loop resolves abbreviations and synonyms**:
-
-- "apis" → searches "application programming interface" → Q165194 ✅
-- "k8s" → searches "kubernetes" → Q22661306 ✅
-- "js" → searches "javascript" → Q2005 ✅
-- "agent" → searches "software agent" → Q2297769 ✅
-
-### Files Created/Modified (Sprint 3)
-
-```
-ontology/devkg.ttl                    # +Project, hasSourceFile, belongsToProject, hasWorkingDirectory
-pipeline/common.py                    # NEW: shared RDF logic (219 lines)
-pipeline/jsonl_to_rdf.py              # Refactored: imports common.py, +hasSourceFile, +Project
-pipeline/deepseek_to_rdf.py           # NEW: DeepSeek parser (370 lines)
-pipeline/grok_to_rdf.py               # NEW: Grok parser (267 lines)
-pipeline/warp_to_rdf.py               # NEW: Warp parser (313 lines)
-pipeline/cursor_to_rdf.py             # NEW: Cursor parser (246 lines) — NOT integrated, see Sprint 4
-pipeline/triple_extraction.py         # +retry logic (MAX_RETRIES=2)
-pipeline/link_entities.py             # Enhanced: SQLite cache, batch mode, aliases
-pipeline/entity_aliases.json          # NEW: 31 tech synonym mappings
-pipeline/batch_extraction.py          # NEW: Gemini batch prediction (252 lines)
-pipeline/sample_queries.sparql        # +Queries 9-14
-pipeline/agentic_linker.py            # NEW: single-shot Gemini linker (prototype)
-pipeline/agentic_linker_adk.py        # NEW: Google ADK ReAct agent (317 lines)
-pipeline/agentic_linker_langgraph.py  # NEW: LangGraph ReAct agent (307 lines) — WINNER
-hooks/post_session_hook.sh            # NEW: automation skeleton
-daemon/sync_daemon.py                 # NEW: watchdog file watcher
-daemon/watermarks.json                # NEW: tracking state
-requirements.txt                      # +qwikidata, google-cloud-storage, watchdog
-output/claude_sample.ttl              # Sprint 3 output
-output/deepseek_sample.ttl            # Sprint 3 output
-output/grok_sample.ttl                # Sprint 3 output
-output/warp_sample.ttl                # Sprint 3 output
-output/wikidata_links.ttl             # Sprint 3 entity links
-```
-
-### How to Run
-
-```bash
-# Start Fuseki
-cd ~/opt/apache-jena-fuseki && ./fuseki-server &
-
-# Run parsers (1 conversation each)
-.venv/bin/python -m pipeline.jsonl_to_rdf <session.jsonl> output/claude_sample.ttl
-.venv/bin/python -m pipeline.deepseek_to_rdf external_knowledge/deepseek_data-2026-01-28.zip output/deepseek_sample.ttl --conversation 0
-.venv/bin/python -m pipeline.grok_to_rdf external_knowledge/grok_data-2026-01-28.zip output/grok_sample.ttl --conversation 0
-.venv/bin/python -m pipeline.warp_to_rdf output/warp_sample.ttl --conversation 0
-
-# Entity linking (batch across all outputs)
-.venv/bin/python -m pipeline.link_entities --input output/*_sample.ttl --output output/wikidata_links.ttl
-
-# Load into Fuseki
-.venv/bin/python pipeline/load_fuseki.py output/*_sample.ttl output/wikidata_links.ttl
-
-# Agentic linker (LangGraph)
-.venv/bin/python pipeline/agentic_linker_langgraph.py
-```
-
----
-
-## Sprint 4 Results (2026-02-14): Agentic Linker Integration + Bulk Pipeline
-
-### What Was Built
-
-- [x] **P0 DONE**: Integrated LangGraph ReAct agent into `link_entities.py` — replaces heuristic `select_best_match()` with LLM-powered disambiguation. `--heuristic` flag preserved as fallback.
-- [x] **P0 DONE**: Bulk processing script (`pipeline/bulk_process.py`) — finds all `~/.claude/projects/**/*.jsonl`, runs parse+extract+link. SHA256 content hashing for watermarks (skip already-processed). CLI: `--dry-run`, `--limit N`, `--skip-linking`, `--force`.
-- [x] **P1 DONE**: Stopword filter in `triple_extraction.py` — rejects single chars, paths (`/exit`), dimension strings (`1400px`), generic noise (`command name`, `exit`). Applied in `_parse_triples_response()`.
-- [x] **P1 DONE**: Entity deduplication — post-processing in `link_entity_list()`: entities sharing the same Wikidata QID get `owl:sameAs` to each other (e.g., `medication` == `medicamento` via Q12140).
-- [x] **P1 DONE**: Confidence threshold `CONFIDENCE_THRESHOLD = 0.7` — only emits `owl:sameAs` for high-confidence matches. Low-confidence logged to stderr.
-- [x] **Dropped**: Cursor parser deleted (`pipeline/cursor_to_rdf.py`) — unmaintained CLI, low value.
-- [x] **Done**: Warp quality filter — `--min-exchanges N` (default: 5) and `--min-triples N` (default: 1) flags in `warp_to_rdf.py`.
-- [x] **Dependencies**: Added `langchain-google-genai`, `langgraph`, `pydantic` to `requirements.txt`.
-
-### E2E Pipeline Test (13 Sessions)
-
-| Metric                      | Value                      |
-| --------------------------- | -------------------------- |
-| Sessions processed          | 13 (8 unique + 5 subagent) |
-| Total RDF triples in Fuseki | 7,181                      |
-| Entities                    | 360                        |
-| Knowledge triples           | 420 (413 unique)           |
-| Wikidata owl:sameAs links   | 120 (33% link rate)        |
-| Deduplicated entity pairs   | 19                         |
-| Low-confidence rejected     | 4                          |
-| Predicates used             | 20 of 24                   |
-
-### What Worked Well
-
-- Stopword filter correctly rejected non-entities (`/exit`, `1400px+ width`, single letters)
-- Confidence threshold (0.7) filtered noise like `hardcoding token value` → Q631425 (conf=0.60)
-- Entity deduplication caught 19 pairs (e.g., `medication` == `medicamento` via same QID Q12140, `otel` == `opentelemetry` via Q121746046)
-- SHA256 watermarks prevent reprocessing on re-runs
-- Agentic linker resolves abbreviations: `otel` → OpenTelemetry, `npm` → Q7067518
-
-### Known Issues
-
-- **76% knowledge triple duplication** from subagent files sharing parent session content — subagent `.jsonl` files contain overlapping context with their parent session. Needs subagent deduplication logic (skip subagent files, or detect parent session overlap).
-- **`GOOGLE_API_KEY` warning floods stderr** — cosmetic, from `langchain-google-genai` creating fresh model instances per entity. Could suppress with `warnings.filterwarnings`.
-- **33% Wikidata link rate** — many extracted entities are domain-specific (medical terms in Portuguese, internal config paths) that don't exist in Wikidata. Expected for a personal KG.
-
-### Files Created/Modified (Sprint 4)
-
-```
-pipeline/bulk_process.py          # NEW: bulk session processor (watermarks, --dry-run, --limit)
-pipeline/triple_extraction.py     # +STOPWORDS set, +is_valid_entity(), filter in _parse_triples_response()
-pipeline/link_entities.py         # +agentic mode (LangGraph), +confidence threshold, +entity dedup, +--heuristic flag
-pipeline/warp_to_rdf.py           # +--min-exchanges, +--min-triples quality filters
-pipeline/common.py                # Removed Cursor from docstring
-pipeline/cursor_to_rdf.py         # DELETED
-requirements.txt                  # +langchain-google-genai, langgraph, pydantic
-output/claude/*.ttl               # 13 session outputs + wikidata_links.ttl
-output/claude/watermarks.json     # SHA256 hashes for processed sessions
-```
-
-### How to Run
-
-```bash
-# Start Fuseki
-cd ~/opt/apache-jena-fuseki && ./fuseki-server &
-
-# Bulk process (all sessions)
-.venv/bin/python -m pipeline.bulk_process
-
-# Bulk process (limited, dry-run)
-.venv/bin/python -m pipeline.bulk_process --dry-run
-.venv/bin/python -m pipeline.bulk_process --limit 10
-
-# Entity linking only (agentic, default)
-.venv/bin/python -m pipeline.link_entities --input output/claude/*.ttl --output output/claude/wikidata_links.ttl
-
-# Entity linking (heuristic fallback)
-.venv/bin/python -m pipeline.link_entities --heuristic --input output/claude/*.ttl --output output/claude/wikidata_links.ttl
-
-# Load into Fuseki
-.venv/bin/python pipeline/load_fuseki.py output/claude/*.ttl
-
-# Warp with quality filter
-.venv/bin/python -m pipeline.warp_to_rdf output/warp.ttl --conversation 0 --min-exchanges 5
-```
-
----
-
-## Sprint 5 Results (2026-02-15): DevKG SPARQL Skill + Wikidata Traversal
-
-### What Was Built
-
-- [x] **SPARQL skill** (`.claude/skills/devkg-sparql/SKILL.md`, 611 lines) — teaches Claude Code to query Fuseki via SPARQL instead of grepping raw JSONL files
-- [x] **14 local graph query templates**: entity lookup (with provenance), entity-to-entity, predicate search, session listing, topic search, cross-platform overlap, Wikidata enrichment, full-text search, 2-hop neighborhood, hub detection, cross-session overlap, path discovery, project knowledge map, sibling entities
-- [x] **6 Wikidata traversal templates** (W1-W6): entity properties, peer discovery, disambiguation, category hierarchy, relationship bridge, batch enrichment
-- [x] **Fosfomycin Wikidata link fixed**: was incorrectly linked to Q421268 (tubocurarine), corrected to Q183554 (fosfomycin) via SPARQL UPDATE
-- [x] **`.gitignore` updated**: `.claude/*` with `!.claude/skills/` exception to track skills in git
-
-### Key Design Decisions
-
-- **Provenance in every query**: Templates 1 and 5 include `sourceFile`, `platform`, and content snippet so the agent can trace back to the original document
-- **Bidirectional traversal**: Template 1 uses UNION to search both outbound and inbound edges (relationships may be stored in either direction)
-- **`FILTER(LANG(?label) = "")` everywhere**: Avoids duplicate rows from lang-tagged vs untagged literals (data quality issue from earlier sprints)
-- **Wikidata as enrichment layer**: local KG knows dosing protocols and integrations; Wikidata knows drug classifications, software ecosystems, and peer alternatives. The skill teaches a Local→Wikidata→Back workflow.
-- **Multi-line `--data-urlencode` with double quotes**: avoids shell escaping issues with `!=` and `""` in SPARQL operators
-
-### Comparison: SPARQL vs Grep
-
-| Metric                 | SPARQL (new) | Grep (old) |
-| ---------------------- | ------------ | ---------- |
-| Tool calls             | **1**        | 5-10+      |
-| Token consumption      | **~2K**      | 50K-350K   |
-| Relationship questions | **Yes**      | **No**     |
-| Cross-platform queries | **Yes**      | No         |
-| Provenance tracking    | **Yes**      | Manual     |
-| Wikidata enrichment    | **Yes**      | No         |
-
-### Graph Traversal Examples Validated
-
-- **2-hop**: `warp plugin --uses--> warp native notification system --uses--> osc 777 escape sequences`
-- **Hub detection**: `suggestion mode` (69 edges), `claude code` (22), `excel spreadsheet` (18)
-- **Siblings**: fosfomycin → nitrofurantoin, phenazopyridine (share `isTypeOf medication`, `servesAs outpatient treatment`)
-- **Wikidata enrichment**: nitrofurantoin local (dosing) + Wikidata (ATC code J01XE01, treats UTI, cystitis, gram-negative)
-
-### Files Created/Modified
-
-```
-.claude/skills/devkg-sparql/SKILL.md  # NEW: SPARQL skill (611 lines, 14 local + 6 Wikidata templates)
-.gitignore                            # Updated: .claude/* with !.claude/skills/ exception
-```
-
-### Data Fixes
-
-- Fosfomycin `owl:sameAs` corrected: Q421268 (tubocurarine) → Q183554 (fosfomycin) via SPARQL UPDATE on Fuseki
-- Total triples in Fuseki: 7,183
-
----
-
-## Sprint 6 Session 1 (2026-02-15): Pre-Sprint Fixes + Model Comparison
-
-### What Was Done (Previous Session — NOT YET COMMITTED)
-
-6 pre-sprint fixes (built by a team of agents):
-
-- Subagent dedup in `bulk_process.py` — 998 files filtered
-- `relatedTo` overuse — prompt guide + wrong/correct examples → 10% → 0.3%
-- Gemini JSON truncation — `max_output_tokens` 4096→8192, salvage partial triples
-- Wikidata aliases — 31→161 mappings in `entity_aliases.json`
-- API key warning suppression + model singleton in `agentic_linker_langgraph.py`
-- Pipeline readiness verified — 594 sessions, ~$6.77 estimated cost
-
-3 bugs found and fixed during testing:
-
-- Entity boundaries — prompt enforces 1-3 words, `is_valid_entity()` rejects 4+
-- Agent hallucinating QIDs — upgraded gemini-2.5-flash-lite → gemini-2.5-flash, added "only return QIDs from search results" rules
-- Cache corruption — cleaned false matches, removed orphaned transformers package, added singleton for Vertex AI init
-
-### What Was Done (This Session)
-
-1. **Assistant-only extraction** — `jsonl_to_rdf.py` now only sends assistant messages to Gemini (user messages are short prompts, assistant messages contain the actual knowledge analysis). Line 210: `entry_type == "assistant"` guard added.
-
-2. **5-model comparison** on enterprise-ontology session (79 assistant messages):
-
-| Model                  | Triples | Predicates | relatedTo | Verdict                         |
-| ---------------------- | ------- | ---------- | --------- | ------------------------------- |
-| **Gemini 2.5 Flash**   | **142** | **15**     | 1 (0.7%)  | **Best overall**                |
-| Gemini 3 Flash Preview | 123     | 18         | 2 (1.6%)  | Close second, widest vocab      |
-| Gemini 2.5 Flash-Lite  | 109     | 13         | 12 (11%)  | Noisy                           |
-| Claude Haiku 4.5       | 37      | 9          | 0         | High precision, terrible recall |
-| Gemini 2.0 Flash       | 30      | 10         | 3 (10%)   | Poor                            |
-
-Key finding: only 20% triple overlap between models — extraction is highly model-dependent.
-
-3. **Claude Vertex AI support** — Added `ClaudeModelWrapper` in `vertex_ai.py` wrapping `AnthropicVertex` client to match Gemini's `generate_content()` interface. Usage: `--model claude-haiku-4-5@20251001`
-
-4. **Gemini 3 Flash Preview support** — Requires `global` endpoint (not regional). Added `_GLOBAL_ONLY_MODELS` set and auto re-init with `location="global"` in `get_gemini_model()`.
-
-5. **Entity linking test** — Cache working correctly (all 241 entities served from SQLite cache for previously seen entities, agentic LLM calls only for new ones). Fixed region mismatch: `agentic_linker_langgraph.py` was using `CLOUD_ML_REGION`/`us-east5`, changed to `VERTEX_AI_LOCATION`/`us-central1`.
-
-### Known Issues / Broken State
-
-- **Entity linking output buffering** — `link_entities.py` output doesn't appear when piped. Fix: use `PYTHONUNBUFFERED=1` env var when running.
-- **Cache quality concerns** — Some cached Wikidata links are questionable: `agent` → Q37281213 (family name), `astrobee` → Q63976358 (ISS robot, not the data company). Consider cache cleanup or re-linking with stricter context.
-- **`vertexai` SDK deprecation warning** — cosmetic, won't affect until June 2026.
-- **Previous session's 6 fixes are NOT committed** — need to commit before further changes.
-
-### Files Modified (This Session)
-
-```
-pipeline/jsonl_to_rdf.py              # +assistant-only extraction filter (line 210)
-pipeline/vertex_ai.py                 # +ClaudeModelWrapper, +get_claude_model(), +_GLOBAL_ONLY_MODELS, +global endpoint re-init
-pipeline/agentic_linker_langgraph.py  # Fixed: CLOUD_ML_REGION → VERTEX_AI_LOCATION for region
-requirements.txt                      # +anthropic[vertex] (needs adding)
-output/test_run/                      # Test outputs (enterprise_ontology.ttl, slack_tmux.ttl, enterprise_flash_lite.ttl, enterprise_haiku.ttl, enterprise_gemini3_flash.ttl)
-```
-
-### How to Run Model Comparison
-
-```bash
-# Default (gemini-2.5-flash)
-.venv/bin/python -m pipeline.jsonl_to_rdf <session.jsonl> output/result.ttl
-
-# Flash-Lite (cheaper, noisier)
-.venv/bin/python -m pipeline.jsonl_to_rdf <session.jsonl> output/result.ttl --model gemini-2.5-flash-lite
-
-# Gemini 3 Flash Preview (needs global endpoint)
-.venv/bin/python -m pipeline.jsonl_to_rdf <session.jsonl> output/result.ttl --model gemini-3-flash-preview
-
-# Claude Haiku 4.5 via Vertex AI (needs us-east5)
-.venv/bin/python -m pipeline.jsonl_to_rdf <session.jsonl> output/result.ttl --model claude-haiku-4-5@20251001
-
-# Entity linking (use PYTHONUNBUFFERED=1 to see progress)
-PYTHONUNBUFFERED=1 .venv/bin/python -m pipeline.link_entities --input output/*.ttl --output output/wikidata_links.ttl
-```
-
----
-
-## Pipeline Flow (Current)
+## Pipeline Flow
 
 ```
 1. SOURCE PARSING (per platform → RDF Turtle)
@@ -768,7 +220,7 @@ PYTHONUNBUFFERED=1 .venv/bin/python -m pipeline.link_entities --input output/*.t
 3. BULK PROCESSING (orchestrator — Claude Code sessions only)
 ─────────────────────────────────────────────────────────────
 
-  bulk_process.py
+  bulk_process.py (sequential, per-session)
   ├── Finds all ~/.claude/projects/**/*.jsonl
   ├── Filters out subagent files (avoids duplicate triples)
   ├── SHA256 watermarks → skip already-processed sessions
@@ -776,6 +228,12 @@ PYTHONUNBUFFERED=1 .venv/bin/python -m pipeline.link_entities --input output/*.t
   │   ├── Step 1: jsonl_to_rdf.py → output/claude/<session>.ttl
   │   └── Step 2: link_entities.py → output/claude/wikidata_links.ttl
   └── CLI: --dry-run, --limit N, --skip-linking, --force
+
+  bulk_batch.py (Vertex AI Batch Prediction, 50% cost discount)
+  ├── submit: all sessions → GCS → single batch job
+  ├── status --wait: poll until SUCCEEDED
+  ├── collect: download results → .ttl files
+  └── Entity linking run separately after collect
 
 
 4. LOAD INTO TRIPLESTORE
@@ -795,134 +253,138 @@ PYTHONUNBUFFERED=1 .venv/bin/python -m pipeline.link_entities --input output/*.t
   └── Claude Code via devkg-sparql skill (auto-generates SPARQL)
 ```
 
-### How to Run (Full Pipeline)
+## File Structure
+
+```
+ontology/devkg.ttl                    # OWL ontology (PROV-O + SIOC + SKOS + DC + Schema.org + 24 predicates)
+pipeline/
+├── common.py                        # Shared: namespaces, URI helpers, RDF node builders
+├── vertex_ai.py                     # Vertex AI auth, Gemini + Claude model wrappers
+├── triple_extraction.py             # Ontologist prompt, extraction, normalization, stopwords
+├── jsonl_to_rdf.py                  # Claude Code JSONL → RDF (assistant-only extraction)
+├── deepseek_to_rdf.py               # DeepSeek JSON zip → RDF
+├── grok_to_rdf.py                   # Grok MongoDB JSON → RDF
+├── warp_to_rdf.py                   # Warp SQLite → RDF (--min-exchanges, --min-triples)
+├── link_entities.py                 # Wikidata entity linking (agentic default, --heuristic fallback)
+├── agentic_linker_langgraph.py      # LangGraph ReAct agent for Wikidata disambiguation
+├── entity_aliases.json              # 161 tech synonym mappings (k8s→kubernetes, etc.)
+├── bulk_process.py                  # Sequential bulk processor (watermarks, --dry-run)
+├── bulk_batch.py                    # Vertex AI Batch Prediction (submit/status/collect)
+├── batch_extraction.py              # Batch job helpers (GCS upload, polling)
+├── load_fuseki.py                   # Upload .ttl to Apache Jena Fuseki
+├── sample_queries.sparql            # 14 SPARQL query templates
+├── .entity_cache.db                 # SQLite cache for Wikidata links (auto-created)
+├── agentic_linker.py                # Single-shot Gemini linker (prototype, superseded)
+└── agentic_linker_adk.py            # Google ADK agent (superseded by LangGraph)
+.claude/skills/devkg-sparql/SKILL.md # SPARQL skill (14 local + 6 Wikidata templates)
+cognee_eval/                         # Cognee evaluation (rejected — no RDF output)
+research/                            # Wikidata entity linking research docs
+hooks/post_session_hook.sh           # Automation skeleton
+daemon/sync_daemon.py                # Watchdog file watcher skeleton
+output/                              # Generated .ttl files and batch job manifests
+requirements.txt                     # Python dependencies
+```
+
+## How to Run
 
 ```bash
 # Start Fuseki
 cd ~/opt/apache-jena-fuseki && ./fuseki-server &
 
-# Option A: Bulk process all Claude Code sessions
+# Option A: Bulk process all Claude Code sessions (sequential)
 .venv/bin/python -m pipeline.bulk_process
+
+# Option A2: Bulk process via Vertex AI Batch Prediction (cheaper, faster)
+.venv/bin/python -m pipeline.bulk_batch submit
+.venv/bin/python -m pipeline.bulk_batch status --wait --poll-interval 60
+.venv/bin/python -m pipeline.bulk_batch collect
 
 # Option B: Single session
 .venv/bin/python -m pipeline.jsonl_to_rdf <session.jsonl> output/result.ttl
 
-# Option C: Other platforms (run individually)
+# Option C: Other platforms
 .venv/bin/python -m pipeline.deepseek_to_rdf external_knowledge/deepseek_data.zip output/deepseek.ttl --conversation 0
 .venv/bin/python -m pipeline.grok_to_rdf external_knowledge/grok_data.zip output/grok.ttl --conversation 0
 .venv/bin/python -m pipeline.warp_to_rdf output/warp.ttl --conversation 0 --min-exchanges 5
 
-# Entity linking (all outputs)
+# Custom model (default: gemini-2.5-flash)
+.venv/bin/python -m pipeline.jsonl_to_rdf <session.jsonl> output/result.ttl --model gemini-2.5-flash-lite
+.venv/bin/python -m pipeline.jsonl_to_rdf <session.jsonl> output/result.ttl --model gemini-3-flash-preview
+.venv/bin/python -m pipeline.jsonl_to_rdf <session.jsonl> output/result.ttl --model claude-haiku-4-5@20251001
+
+# Structure only (no LLM API calls)
+.venv/bin/python -m pipeline.jsonl_to_rdf <session.jsonl> output/result.ttl --skip-extraction
+
+# Entity linking (agentic, default — use PYTHONUNBUFFERED=1 to see progress)
 PYTHONUNBUFFERED=1 .venv/bin/python -m pipeline.link_entities --input output/*.ttl --output output/wikidata_links.ttl
+
+# Entity linking (heuristic fallback)
+.venv/bin/python -m pipeline.link_entities --heuristic --input output/*.ttl --output output/wikidata_links.ttl
 
 # Load into Fuseki
 .venv/bin/python pipeline/load_fuseki.py output/*.ttl
+
+# Query at http://localhost:3030
 ```
 
----
+## Key Design Decisions & Learnings
 
-## Sprint 6 Session 2 (2026-02-15): Cache Cleanup + Pipeline Docs
+- **Assistant-only extraction**: Only assistant messages are sent to Gemini for triple extraction. User messages are short prompts with no extractable knowledge.
+- **Closed-world predicate vocabulary**: 24 predicates defined as OWL ObjectProperties. LLM is constrained to this set; any deviation is fuzzy-matched to the closest predicate (fallback: `relatedTo`). Prompt includes wrong/correct examples to keep `relatedTo` usage under 1%.
+- **Dual storage**: Direct edges for fast traversal + reified `KnowledgeTriple` nodes for provenance (links back to source message + session).
+- **Provenance in every SPARQL query**: Templates include `sourceFile`, `platform`, and content snippet. Bidirectional traversal via UNION (relationships may be stored in either direction).
+- **Agentic linker over heuristic**: LangGraph ReAct agent (Gemini 2.5 Flash + Wikidata API tool) achieves 7/7 precision vs ~50% for keyword heuristic. Resolves abbreviations (k8s→kubernetes, otel→OpenTelemetry). ADK agent had same precision but failed 3/7 due to text parsing fragility.
+- **Confidence threshold 0.7**: Only emits `owl:sameAs` for high-confidence Wikidata matches. Low-confidence logged to stderr.
+- **Entity deduplication**: Entities sharing the same Wikidata QID get `owl:sameAs` to each other (e.g., `medication` == `medicamento` via Q12140).
+- **Subagent filtering**: `bulk_process.py` filters out subagent `.jsonl` files to avoid 76% knowledge triple duplication from overlapping content with parent sessions.
+- **Model comparison** (on 79 assistant messages): Gemini 2.5 Flash is best overall (142 triples, 15 predicates, 0.7% relatedTo). Flash-Lite is noisy (11% relatedTo). Claude Haiku 4.5 has high precision but terrible recall (37 triples). Only 20% triple overlap between models.
+- **`FILTER(LANG(?label) = "")`**: Used in all SPARQL queries to avoid duplicate rows from lang-tagged vs untagged literals.
+- **Entity boundaries**: Prompt enforces 1-3 word entities; `is_valid_entity()` rejects 4+ words, paths, dimension strings, single chars.
 
-### What Was Done
+## Known Issues & Troubleshooting
 
-1. **Verified entity linking works** — tested 4 entities (neo4j, k8s, react, agent), all resolved correctly with confidence 1.0 via agentic linker (Gemini 2.5 Flash)
-2. **Inspected entity cache** — found 1,328 entries, ~90 with bad links from old heuristic linker (caching→animal behavior, rock pi→pigeon, ecs→endocannabinoid system, etc.)
-3. **Wiped entity cache** — deleted `.entity_cache.db` for clean start with agentic linker only
-4. **Documented pipeline flow** — added full pipeline flow diagram to CLAUDE.md
+- **Entity linking output buffering**: `link_entities.py` output doesn't appear when piped. Fix: use `PYTHONUNBUFFERED=1` env var.
+- **`vertexai` SDK deprecation warning**: Cosmetic, won't affect until June 2026.
+- **Cache quality**: Some cached Wikidata links may be questionable if created by the old heuristic linker. Wipe `.entity_cache.db` and re-link with agentic linker if needed.
+- **33% Wikidata link rate**: Expected for a personal KG — many entities are domain-specific (medical terms in Portuguese, internal config paths) that don't exist in Wikidata.
+- **Gemini JSON truncation**: ~5% of responses truncate mid-JSON on long outputs. `max_output_tokens` set to 8192 with retry logic (max 2 retries, shorter input on retry).
+- **Gemini 3 Flash Preview**: Requires `global` endpoint (not regional). `get_gemini_model()` auto-reinitializes with `location="global"`.
+- **Batch collect idempotency**: Watermarks updated per-session during collect. If collect crashes mid-way, partial progress is saved but batch output must be re-downloaded.
 
-### Files Modified
+## Sprint History
 
-```
-CLAUDE.md                          # +Pipeline Flow section, +Sprint 6 Session 2 progress
-pipeline/.entity_cache.db          # DELETED (wiped for clean re-linking)
-```
+| Sprint | Date       | Key Accomplishments |
+| ------ | ---------- | ------------------- |
+| 1      | 2026-02-13 | OWL ontology (PROV-O+SIOC+SKOS+DC+Schema.org), JSONL→RDF pipeline, Fuseki. Cognee rejected. **Post-mortem: flat tags, no relationships.** |
+| 2      | 2026-02-14 | Fixed: `(s,p,o)` triple extraction, 24-predicate vocabulary, Gemini 2.5 Flash, dual storage (direct edges + reified triples). 128 knowledge triples. |
+| 2.5    | 2026-02-14 | Wikidata entity linking via `owl:sameAs`. 88% coverage on major dev tools. |
+| 3      | 2026-02-14 | Multi-platform parsers (DeepSeek, Grok, Warp), shared `common.py`, retry logic, enhanced entity linking (SQLite cache, batch mode, 31 aliases). |
+| 3.5    | 2026-02-14 | Agentic entity linking: LangGraph ReAct agent replaced heuristic. 7/7 precision, resolves abbreviations. |
+| 4      | 2026-02-14 | `bulk_process.py` (watermarks, subagent filtering), stopword filter, entity dedup, confidence threshold. E2E: 13 sessions, 7K triples, 420 knowledge triples. |
+| 5      | 2026-02-15 | SPARQL skill for Claude Code (14 local + 6 Wikidata templates). 1 tool call replaces 5-10+ grep calls. |
+| 6.1    | 2026-02-15 | 6 pre-sprint fixes (subagent dedup, relatedTo overuse, JSON truncation, 161 aliases). 5-model comparison. Claude Vertex AI + Gemini 3 support. Assistant-only extraction. |
+| 6.2    | 2026-02-15 | Entity cache wiped (90 bad links from heuristic era). Pipeline flow documented. |
+| 6.3    | 2026-02-16 | `bulk_batch.py` — Vertex AI Batch Prediction (submit/status/collect). E2E validated. 50% cost discount. |
 
----
+## Cost Analysis
 
-## Sprint 6 Session 3 (2026-02-16): Batch Pipeline via Vertex AI Batch Prediction API
+| Component            | Tool                                                 | Cost           |
+| -------------------- | ---------------------------------------------------- | -------------- |
+| Graph DB             | Neo4j Community (Docker) or AuraDB Free              | $0             |
+| KG framework         | Cognee or Graphiti (open source)                     | $0             |
+| Code parsing         | tree-sitter + CodeGraph                              | $0             |
+| Conversation parsing | claude-code-log, chatgpt-exporter, cursor-history    | $0             |
+| Orchestration        | LangChain + LangGraph                                | $0             |
+| Embeddings           | Ollama (nomic-embed-text, local)                     | $0             |
+| LLM extraction       | Gemini 2.5 Flash via Vertex AI                       | ~$0.60/600 sessions (batch) |
 
-### What Was Built
+## Reference Projects
 
-- [x] **`pipeline/bulk_batch.py`** (~350 lines) — 3-subcommand batch pipeline: `submit` → `status` → `collect`
-- [x] **GCS bucket** `gs://devkg-batch-predictions` created in `us-central1`
-- [x] **`output/batch_jobs/.gitkeep`** — directory for job manifests
-
-### E2E Test (1 session, 13 messages)
-
-| Step | Result |
-|------|--------|
-| `submit --limit 2` | 13 messages → GCS → Vertex AI batch job |
-| `status --wait` | PENDING → QUEUED → RUNNING → SUCCEEDED (~8.5 min) |
-| `collect` | 150 knowledge triples, 131 entities → `.ttl` |
-| Entity linking | 62/130 linked (47.7%), 11 dedup pairs |
-| Fuseki load | 2,457 triples |
-
-### Bugs Found and Fixed
-
-1. **Metadata serialization** — Vertex AI Batch Prediction rejects nested JSON objects in metadata field. Fixed: serialize metadata dict to JSON string, deserialize on collect.
-2. **`poll_job` state enum mismatch** — `str(job.state)` returned raw int (e.g., `"5"`) not enum name. `"SUCCEEDED" in "5"` never matched → infinite polling. Fixed: use `job.state.value` with numeric comparison against `JobState` enum values.
-
-### Scale Estimate for Full Run
-
-| Metric | Value |
-|--------|-------|
-| Total sessions (excl. subagents) | 610 |
-| Already watermarked | 10 |
-| Pending | 600 |
-| Est. assistant messages | ~6,060 |
-| Est. batch JSONL size | ~18 MB (limit: 10 GB) |
-| Largest session | 36 MB JSONL → 41 assistant messages |
-
-### Critical Analysis: Ready for Full Run?
-
-**Go / No-Go Assessment:**
-
-| Concern | Status | Detail |
-|---------|--------|--------|
-| Batch API works | ✅ | Tested E2E with real data |
-| Metadata serialization | ✅ | Fixed (JSON string) |
-| State polling | ✅ | Fixed (numeric enum) |
-| Subagent filtering | ✅ | 1,022 subagents filtered |
-| Empty sessions | ✅ | `build_graph` handles gracefully (34 structural triples) |
-| Large sessions (36MB) | ✅ | Only 41 assistant messages, text truncated to 1500 chars |
-| Batch size limits | ✅ | 18 MB << 10 GB limit |
-| `max_output_tokens` | ✅ | Set to 8192 (was 4096 in old `batch_extraction.py`) |
-| Collect idempotency | ⚠️ | **Watermarks updated per-session during collect — if collect crashes mid-way, partial progress is saved but batch output must be re-downloaded** |
-| Entity linking at scale | ⚠️ | **~6K entities × ~5s/entity = ~8 hours for agentic linking. Consider `--skip-linking` on first run, link separately.** |
-| Cost | ✅ | Batch API = 50% discount. ~6K requests × $0.0001 ≈ $0.60 |
-
-**Recommendation:** Ready for full run. Use `submit` without `--limit`, then `status --wait`, then `collect` (without `--link` first). Run entity linking separately after.
-
-### Files Created/Modified
-
-```
-pipeline/bulk_batch.py             # NEW: 3-subcommand batch pipeline (~350 lines)
-pipeline/batch_extraction.py       # MODIFIED: fixed poll_job state enum handling
-output/batch_jobs/.gitkeep         # NEW: directory for manifests
-output/batch_jobs/20260215_*.json  # Test manifests (2 runs)
-```
-
-### How to Run (Full Pipeline)
-
-```bash
-# 1. Submit all 600 sessions
-.venv/bin/python -m pipeline.bulk_batch submit
-
-# 2. Wait for completion (~10-20 min for batch)
-.venv/bin/python -m pipeline.bulk_batch status --wait --poll-interval 60
-
-# 3. Collect results (without entity linking)
-.venv/bin/python -m pipeline.bulk_batch collect
-
-# 4. Entity linking (separate, slower step)
-PYTHONUNBUFFERED=1 .venv/bin/python -m pipeline.link_entities \
-  --input output/claude/*.ttl --output output/claude/wikidata_links.ttl
-
-# 5. Load into Fuseki
-.venv/bin/python pipeline/load_fuseki.py output/claude/*.ttl
-```
-
----
+- **GRAPH4CODE** (IBM Research): 2B triples, composes Schema.org + SKOS + PROV-O + SIOC + SIO
+- **Cognee repo-to-knowledge-graph**: `cognee.ai/blog/deep-dives/repo-to-knowledge-graph`
+- **Graphiti MCP server**: `github.com/getzep/graphiti` (temporal KG for agent memory)
+- **Neo4j LLM Knowledge Graph Builder**: Docker-based, extracts KG from PDFs/web/YouTube
+- **Zimin Chen's "Building KG over a Codebase for LLM"**: Neo4j + AST nodes + Cypher queries
 
 ## Next Steps
 
