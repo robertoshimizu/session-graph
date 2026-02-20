@@ -58,35 +58,59 @@ GOOGLE_CLOUD_PROJECT=<your-project-id>
 
 ## Running the Pipeline
 
-### Quick Start: Process Latest Sessions
+### Recommended: Batch Pipeline (fastest, cheapest)
+
+Three decoupled steps — Vertex AI handles parallelism, 50% cost discount:
 
 ```bash
-# Process the 50 most recent unprocessed Claude Code sessions
-.venv/bin/python -m pipeline.bulk_process --limit 50 --sort newest
-```
+# Step 1: Submit batch job (uploads all unprocessed sessions to Vertex AI)
+.venv/bin/python -m pipeline.bulk_batch submit --sort newest
 
-This runs triple extraction (Gemini) + entity linking (Wikidata) for each session. Already-processed sessions are skipped automatically via SHA256 watermarks.
-
-### Step-by-Step: Full Control
-
-```bash
-# 1. Extract triples from sessions → .ttl files
-#    Option A: Sequential (real-time Gemini calls)
-.venv/bin/python -m pipeline.bulk_process --limit 50 --sort newest --skip-linking
-
-#    Option B: Batch (50% cheaper via Vertex AI Batch Prediction)
-.venv/bin/python -m pipeline.bulk_batch submit
+# Step 2: Wait for completion (poll every 60s)
 .venv/bin/python -m pipeline.bulk_batch status --wait --poll-interval 60
+
+# Step 3: Collect results → .ttl files
 .venv/bin/python -m pipeline.bulk_batch collect
 
-# 2. Link entities to Wikidata (separate step, can run after batch)
+# Step 4: Link entities to Wikidata (parallel, 8 workers by default)
 PYTHONUNBUFFERED=1 .venv/bin/python -m pipeline.link_entities \
-  --input output/claude/*.ttl --output output/claude/wikidata_links.ttl
+  --input output/claude/*.ttl --output output/claude/wikidata_links.ttl \
+  --workers 8
 
-# 3. Load into Fuseki
+# Step 5: Load into Fuseki
 cd ~/opt/apache-jena-fuseki && ./fuseki-server &
 .venv/bin/python pipeline/load_fuseki.py output/claude/*.ttl
 ```
+
+Use `--limit N` on the submit step to cap the number of sessions.
+
+### Alternative: Sequential Pipeline (simpler, full price)
+
+Processes one session at a time with real-time Gemini calls. Useful for small runs or debugging:
+
+```bash
+# Extract triples (skip entity linking, run it separately with --workers)
+.venv/bin/python -m pipeline.bulk_process --limit 50 --sort newest --skip-linking
+
+# Then link entities in parallel
+PYTHONUNBUFFERED=1 .venv/bin/python -m pipeline.link_entities \
+  --input output/claude/*.ttl --output output/claude/wikidata_links.ttl \
+  --workers 8
+
+# Load into Fuseki
+.venv/bin/python pipeline/load_fuseki.py output/claude/*.ttl
+```
+
+### Pipeline Comparison
+
+| | **Batch** (`bulk_batch`) | **Sequential** (`bulk_process`) |
+|---|---|---|
+| Triple extraction | Vertex AI processes all sessions in parallel | One session at a time, one API call per message |
+| Cost | **50% discount** (Batch Prediction API) | Full price |
+| Latency | Submit + wait (minutes to hours) | Immediate, but slow overall |
+| Best for | Production runs, large volumes | Debugging, small runs (< 5 sessions) |
+
+Both pipelines use the same watermarks — already-processed sessions are skipped automatically.
 
 ### Single Session
 
