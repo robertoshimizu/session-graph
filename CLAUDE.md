@@ -271,6 +271,7 @@ pipeline/
 ├── bulk_process.py                  # Sequential bulk processor (watermarks, --dry-run)
 ├── bulk_batch.py                    # Vertex AI Batch Prediction (submit/status/collect)
 ├── batch_extraction.py              # Batch job helpers (GCS upload, polling)
+├── snapshot_links.py                # Inspect intermediate entity linking (reads cache read-only)
 ├── load_fuseki.py                   # Upload .ttl to Apache Jena Fuseki
 ├── sample_queries.sparql            # 14 SPARQL query templates
 ├── .entity_cache.db                 # SQLite cache for Wikidata links (auto-created)
@@ -340,6 +341,7 @@ PYTHONUNBUFFERED=1 .venv/bin/python -m pipeline.link_entities --input output/*.t
 - **Model comparison** (on 79 assistant messages): Gemini 2.5 Flash is best overall (142 triples, 15 predicates, 0.7% relatedTo). Flash-Lite is noisy (11% relatedTo). Claude Haiku 4.5 has high precision but terrible recall (37 triples). Only 20% triple overlap between models.
 - **`FILTER(LANG(?label) = "")`**: Used in all SPARQL queries to avoid duplicate rows from lang-tagged vs untagged literals.
 - **Entity boundaries**: Prompt enforces 1-3 word entities; `is_valid_entity()` rejects 4+ words, paths, dimension strings, single chars.
+- **Context-aware entity linking**: `link_entities.py` extracts neighboring KnowledgeTriple relationships from .ttl files and passes them as context to the ReAct agent. Dramatically improves disambiguation for ambiguous labels (e.g., "condition" → disease instead of programming conditional).
 
 ## Known Issues & Troubleshooting
 
@@ -365,6 +367,7 @@ PYTHONUNBUFFERED=1 .venv/bin/python -m pipeline.link_entities --input output/*.t
 | 6.1    | 2026-02-15 | 6 pre-sprint fixes (subagent dedup, relatedTo overuse, JSON truncation, 161 aliases). 5-model comparison. Claude Vertex AI + Gemini 3 support. Assistant-only extraction. |
 | 6.2    | 2026-02-15 | Entity cache wiped (90 bad links from heuristic era). Pipeline flow documented. |
 | 6.3    | 2026-02-16 | `bulk_batch.py` — Vertex AI Batch Prediction (submit/status/collect). E2E validated. 50% cost discount. |
+| 7      | 2026-02-20 | Context-aware entity linking (KG triple context → ReAct agent). Fixed 8 mislinked entities. `snapshot_links.py`. Hybrid KG+grep skills. 138K triples in Fuseki. |
 
 ## Cost Analysis
 
@@ -388,9 +391,8 @@ PYTHONUNBUFFERED=1 .venv/bin/python -m pipeline.link_entities --input output/*.t
 
 ## Next Steps
 
-1. **P0**: Commit all Sprint 6 changes
-2. **P0**: Run full batch pipeline (600 sessions)
-3. **P1**: Entity linking on all extracted entities
-4. **P1**: Load everything into Fuseki, run hub detection + cross-session overlap queries
+1. **P0**: Run full bulk pipeline on remaining sessions (`--sort newest`, incremental via watermarks)
+2. **P1**: Reload Fuseki after bulk run, run hub detection + cross-session overlap queries
+3. **P2**: Index other platform sessions (DeepSeek, Grok, Warp) into the KG
 
 Neo4j migration and hybrid vector retrieval are out of scope.
