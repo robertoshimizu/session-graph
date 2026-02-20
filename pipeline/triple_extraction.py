@@ -5,10 +5,10 @@ This module builds an ontologist prompt and parses the LLM response into
 normalized (subject, predicate, object) triples aligned with the devkg ontology.
 
 Usage:
-    from pipeline.vertex_ai import get_gemini_model
+    from pipeline.llm_providers import get_provider
     from pipeline.triple_extraction import extract_triples_gemini
 
-    model = get_gemini_model()
+    model = get_provider("gemini", "gemini-2.5-flash")
     triples = extract_triples_gemini(model, "Neo4j stores data as a property graph")
     # [{"subject": "neo4j", "predicate": "isTypeOf", "object": "property graph"}]
 """
@@ -371,7 +371,9 @@ def extract_triples_gemini(model, text: str) -> list[dict]:
     3. Unparseable response — retry with shorter input
 
     Args:
-        model: A vertexai GenerativeModel instance (from vertex_ai.get_gemini_model).
+        model: An LLMProvider instance (from llm_providers.get_provider) or any
+               object with a generate_content(prompt) method returning an object
+               with a .text property.
         text: The text to extract triples from.
 
     Returns:

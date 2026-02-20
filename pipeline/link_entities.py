@@ -42,11 +42,13 @@ _agentic_initialized = False
 
 
 def _ensure_agentic_init():
-    """Initialize Vertex AI credentials once for agentic linking."""
+    """Ensure environment is loaded for agentic linking. No-op since
+    credentials are now handled by provider auto-detection in
+    agentic_linker_langgraph._get_shared_model()."""
     global _agentic_initialized
     if not _agentic_initialized:
-        from pipeline.agentic_linker_langgraph import _init_vertex_credentials
-        _init_vertex_credentials()
+        from dotenv import load_dotenv
+        load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
         _agentic_initialized = True
 
 

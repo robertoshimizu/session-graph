@@ -21,7 +21,6 @@ import time
 from pathlib import Path
 
 from pipeline.jsonl_to_rdf import build_graph
-from pipeline.vertex_ai import init_vertex, get_gemini_model
 
 
 CLAUDE_PROJECTS_DIR = Path.home() / ".claude" / "projects"
@@ -131,8 +130,12 @@ def main():
         help="Re-process all sessions regardless of watermarks",
     )
     parser.add_argument(
+        "--provider", default=None,
+        help="LLM provider: gemini, openai, anthropic, ollama (auto-detect if omitted)",
+    )
+    parser.add_argument(
         "--model", default=None,
-        help="Gemini model name override",
+        help="Model name override",
     )
     parser.add_argument(
         "--heuristic", action="store_true",
@@ -176,12 +179,11 @@ def main():
         print(f"\nTotal: {len(to_process)} sessions")
         return
 
-    # Initialize Gemini model
+    # Initialize LLM provider
     gemini_model = None
     if not args.skip_extraction:
-        init_vertex()
-        gemini_model = get_gemini_model(model_name=args.model)
-        print(f"Model: {gemini_model._model_name}", file=sys.stderr)
+        from pipeline.llm_providers import get_provider
+        gemini_model = get_provider(provider_name=args.provider, model_name=args.model)
 
     # Ensure output directory
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)

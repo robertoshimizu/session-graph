@@ -158,10 +158,11 @@ def build_graph(
     conversation_id: str,
     skip_extraction: bool = False,
     model=None,
+    developer: str = "developer",
 ):
     """Parse a Warp conversation and build an RDF graph."""
     g = create_graph()
-    developer_uri = create_developer_node(g, "Roberto")
+    developer_uri = create_developer_node(g, developer)
 
     exchanges = get_exchanges(db_path, conversation_id)
     if not exchanges:
@@ -256,7 +257,9 @@ def main():
         "--skip-extraction", action="store_true",
         help="Skip Gemini triple extraction (structure only)",
     )
-    parser.add_argument("--model", help="Gemini model name override")
+    parser.add_argument("--provider", help="LLM provider: gemini, openai, anthropic, ollama (auto-detect if omitted)")
+    parser.add_argument("--model", help="Model name override")
+    parser.add_argument("--developer", default="developer", help="Developer name for provenance (default: developer)")
     parser.add_argument(
         "--min-exchanges", type=int, default=5,
         help="Skip conversations with fewer than N substantive exchanges (len > 30 chars). Default: 5",
@@ -293,13 +296,11 @@ def main():
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Initialize Vertex AI if extraction is enabled
+    # Initialize LLM provider
     gemini_model = None
     if not args.skip_extraction:
-        from pipeline.vertex_ai import init_vertex, get_gemini_model
-        init_vertex()
-        gemini_model = get_gemini_model(model_name=args.model)
-        print(f"  Model: {gemini_model._model_name}", file=sys.stderr)
+        from pipeline.llm_providers import get_provider
+        gemini_model = get_provider(provider_name=args.provider, model_name=args.model)
 
     # Quality filter: check minimum substantive exchanges
     exchanges = get_exchanges(db_path, conversation_id)
@@ -320,6 +321,7 @@ def main():
         db_path, conversation_id,
         skip_extraction=args.skip_extraction,
         model=gemini_model,
+        developer=args.developer,
     )
 
     print(f"  Total RDF triples: {len(g)}", file=sys.stderr)

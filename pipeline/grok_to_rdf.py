@@ -116,6 +116,7 @@ def build_graph(
     zip_path: str,
     skip_extraction: bool = False,
     model=None,
+    developer: str = "developer",
 ):
     """Parse a single Grok conversation and build an RDF graph."""
     g = create_graph()
@@ -141,7 +142,7 @@ def build_graph(
     print(f"  Messages: {len(responses)}", file=sys.stderr)
 
     # Create nodes
-    developer_uri = create_developer_node(g, "Roberto")
+    developer_uri = create_developer_node(g, developer)
 
     session_uri = create_session_node(
         g, conv_id, "grok",
@@ -221,8 +222,10 @@ def main():
     parser.add_argument("--conversation", type=int, default=None,
                         help="Conversation index to process (omit to list all)")
     parser.add_argument("--skip-extraction", action="store_true",
-                        help="Skip Gemini triple extraction")
-    parser.add_argument("--model", help="Gemini model name override")
+                        help="Skip LLM triple extraction")
+    parser.add_argument("--provider", help="LLM provider: gemini, openai, anthropic, ollama (auto-detect if omitted)")
+    parser.add_argument("--model", help="Model name override")
+    parser.add_argument("--developer", default="developer", help="Developer name for provenance (default: developer)")
     args = parser.parse_args()
 
     input_path = Path(args.input)
@@ -242,18 +245,17 @@ def main():
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Initialize Vertex AI if doing extraction
+    # Initialize LLM provider
     gemini_model = None
     if not args.skip_extraction:
-        from pipeline.vertex_ai import init_vertex, get_gemini_model
-        init_vertex()
-        gemini_model = get_gemini_model(model_name=args.model)
-        print(f"  Model: {gemini_model._model_name}", file=sys.stderr)
+        from pipeline.llm_providers import get_provider
+        gemini_model = get_provider(provider_name=args.provider, model_name=args.model)
 
     g = build_graph(
         data, args.conversation, str(input_path),
         skip_extraction=args.skip_extraction,
         model=gemini_model,
+        developer=args.developer,
     )
 
     print(f"  Total RDF triples: {len(g)}", file=sys.stderr)

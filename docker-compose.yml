@@ -1,0 +1,14 @@
+services:
+  fuseki:
+    image: stain/jena-fuseki
+    container_name: devkg-fuseki
+    ports:
+      - "3030:3030"
+    environment:
+      - ADMIN_PASSWORD=admin
+      - FUSEKI_DATASET_1=devkg
+    volumes:
+      - fuseki-data:/fuseki
+
+volumes:
+  fuseki-data:

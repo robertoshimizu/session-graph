@@ -1,7 +1,14 @@
 #!/usr/bin/env python3
 """Batch pipeline for knowledge triple extraction via Vertex AI Batch Prediction API.
 
-Decoupled 3-step pipeline: submit → status → collect.
+NOTE: This module is OPTIONAL and requires Google Cloud Platform (GCP) credentials.
+It uses the Vertex AI Batch Prediction API, which is GCP-specific and does not
+go through the generic llm_providers abstraction. You need:
+    - GOOGLE_APPLICATION_CREDENTIALS or GOOGLE_APPLICATION_CREDENTIALS_BASE64
+    - A GCS bucket for batch input/output
+    - pip install google-cloud-storage google-cloud-aiplatform vertexai
+
+Decoupled 3-step pipeline: submit -> status -> collect.
 Uses Vertex AI Batch Prediction API for 50% cost reduction over real-time calls.
 
 Usage:
@@ -53,7 +60,54 @@ from pipeline.triple_extraction import (
 )
 from pipeline.jsonl_to_rdf import build_graph
 from pipeline.common import add_triples_to_graph, DATA
-from pipeline.vertex_ai import init_vertex
+
+
+def _init_vertex():
+    """Initialize Vertex AI SDK. Requires GCP credentials."""
+    import base64
+    import tempfile
+    import atexit
+
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
+
+    b64_creds = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS_BASE64")
+    if b64_creds:
+        decoded = base64.b64decode(b64_creds).decode("utf-8")
+        fd, creds_path = tempfile.mkstemp(suffix=".json", prefix="gcp-creds-")
+        os.write(fd, decoded.encode("utf-8"))
+        os.close(fd)
+        os.chmod(creds_path, 0o600)
+        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = creds_path
+        atexit.register(lambda: os.unlink(creds_path) if os.path.exists(creds_path) else None)
+
+        import json as _json
+        project = os.environ.get("GOOGLE_CLOUD_PROJECT")
+        if not project:
+            try:
+                project = _json.loads(decoded).get("project_id")
+            except Exception:
+                pass
+        location = os.environ.get("VERTEX_AI_LOCATION", "us-central1")
+
+        import vertexai
+        from google.oauth2 import service_account
+        import google.auth.transport.requests
+        credentials = service_account.Credentials.from_service_account_file(
+            creds_path, scopes=["https://www.googleapis.com/auth/cloud-platform"],
+        )
+        credentials.refresh(google.auth.transport.requests.Request())
+        vertexai.init(project=project, location=location, credentials=credentials)
+        print(f"Vertex AI initialized (project={project}, location={location})", file=sys.stderr)
+    elif os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"):
+        import vertexai
+        vertexai.init()
+        print("Vertex AI initialized (from GOOGLE_APPLICATION_CREDENTIALS)", file=sys.stderr)
+    else:
+        raise RuntimeError(
+            "bulk_batch requires GCP credentials. Set GOOGLE_APPLICATION_CREDENTIALS_BASE64 "
+            "or GOOGLE_APPLICATION_CREDENTIALS in your .env file."
+        )
 
 
 BATCH_JOBS_DIR = Path(__file__).resolve().parent.parent / "output" / "batch_jobs"
@@ -290,7 +344,7 @@ def download_and_parse_batch_output(
 
 def cmd_submit(args):
     """Submit a batch prediction job."""
-    init_vertex()
+    _init_vertex()
 
     # Find sessions to process
     all_sessions = find_sessions(sort=getattr(args, "sort", "name"))
@@ -378,7 +432,7 @@ def cmd_submit(args):
 
 def cmd_status(args):
     """Check batch job status."""
-    init_vertex()
+    _init_vertex()
 
     manifest, manifest_path = load_manifest(args.job)
     job_name = manifest["job_name"]

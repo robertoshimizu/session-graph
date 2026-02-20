@@ -1,0 +1,6 @@
+# Gemini provider (default for triple extraction and agentic linker)
+# Install with: pip install -r requirements-gemini.txt
+
+-r requirements.txt
+google-generativeai>=0.8.0
+langchain-google-genai>=2.0.0

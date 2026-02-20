@@ -47,12 +47,12 @@ def detect_project(jsonl_path: str) -> str | None:
     return None
 
 
-def build_graph(jsonl_path: str, skip_extraction: bool = False, model=None):
+def build_graph(jsonl_path: str, skip_extraction: bool = False, model=None, developer: str = "developer"):
     """Parse a JSONL file and build an RDF graph."""
     g = create_graph()
 
     session_id = None
-    developer_uri = create_developer_node(g, "Roberto")
+    developer_uri = create_developer_node(g, developer)
     entries = []
 
     # First pass: read all entries
@@ -227,8 +227,10 @@ def main():
     parser = argparse.ArgumentParser(description="Convert Claude Code JSONL to RDF Turtle")
     parser.add_argument("input", help="Path to JSONL file")
     parser.add_argument("output", help="Path to output Turtle file")
-    parser.add_argument("--skip-extraction", action="store_true", help="Skip Gemini triple extraction")
-    parser.add_argument("--model", help="Gemini model name override")
+    parser.add_argument("--skip-extraction", action="store_true", help="Skip LLM triple extraction")
+    parser.add_argument("--provider", help="LLM provider: gemini, openai, anthropic, ollama (auto-detect if omitted)")
+    parser.add_argument("--model", help="Model name override")
+    parser.add_argument("--developer", default="developer", help="Developer name for provenance (default: developer)")
     args = parser.parse_args()
 
     input_path = Path(args.input)
@@ -240,19 +242,14 @@ def main():
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Initialize Vertex AI and get model
+    # Initialize LLM provider
     model = None
     if not args.skip_extraction:
-        from pipeline.vertex_ai import init_vertex, get_gemini_model, get_claude_model
-        init_vertex()
-        if args.model and args.model.startswith("claude"):
-            model = get_claude_model(model_name=args.model)
-        else:
-            model = get_gemini_model(model_name=args.model)
-            print(f"  Model: {model._model_name}", file=sys.stderr)
+        from pipeline.llm_providers import get_provider
+        model = get_provider(provider_name=args.provider, model_name=args.model)
 
     print(f"Processing: {input_path}", file=sys.stderr)
-    g = build_graph(str(input_path), skip_extraction=args.skip_extraction, model=model)
+    g = build_graph(str(input_path), skip_extraction=args.skip_extraction, model=model, developer=args.developer)
 
     print(f"  Total RDF triples: {len(g)}", file=sys.stderr)
 

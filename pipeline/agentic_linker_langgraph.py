@@ -2,8 +2,14 @@
 """
 ReAct-style Wikidata entity linker using LangChain + LangGraph.
 
-Uses an LLM agent (Gemini 2.5 Flash Lite via Vertex AI) to search Wikidata,
-reason about ambiguous results, and return the best QID for developer entities.
+Uses an LLM agent to search Wikidata, reason about ambiguous results,
+and return the best QID for developer entities.
+
+Supports multiple LLM providers via environment variables:
+    - GEMINI_API_KEY   -> Google Generative AI (default)
+    - OPENAI_API_KEY   -> OpenAI
+    - ANTHROPIC_API_KEY -> Anthropic
+    - Ollama           -> Local Ollama (fallback)
 
 Usage:
     python -m pipeline.agentic_linker_langgraph
@@ -15,77 +21,20 @@ Dependencies:
 import os
 import sys
 import time
-import json
-import base64
-import tempfile
-import atexit
 import warnings
-from typing import Optional
-
-# Suppress noisy warnings from langchain-google-genai when using Vertex AI
-warnings.filterwarnings("ignore", message=".*GOOGLE_API_KEY.*")
-warnings.filterwarnings("ignore", message=".*GEMINI_API_KEY.*")
 
 import requests
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
-from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.tools import tool
 from langgraph.prebuilt import create_react_agent
 
+# Load .env from project root
+load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
 
-# ---------------------------------------------------------------------------
-# Vertex AI credential setup
-# ---------------------------------------------------------------------------
-
-_vertex_initialized = False
-
-
-def _init_vertex_credentials() -> None:
-    """Decode base64 GCP credentials and set env vars for Vertex AI. Runs once."""
-    global _vertex_initialized
-    if _vertex_initialized:
-        return
-    _vertex_initialized = True
-
-    load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
-
-    b64_creds = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS_BASE64")
-    if not b64_creds:
-        print("Warning: GOOGLE_APPLICATION_CREDENTIALS_BASE64 not set", file=sys.stderr)
-        return
-
-    decoded = base64.b64decode(b64_creds).decode("utf-8")
-
-    # Write to temp file with restricted permissions
-    fd, creds_path = tempfile.mkstemp(suffix=".json", prefix="gcp-creds-")
-    os.write(fd, decoded.encode("utf-8"))
-    os.close(fd)
-    os.chmod(creds_path, 0o600)
-
-    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = creds_path
-
-    # Derive project ID from credentials if not set
-    project = os.environ.get("ANTHROPIC_VERTEX_PROJECT_ID")
-    if not project:
-        try:
-            project = json.loads(decoded).get("project_id", "")
-        except (json.JSONDecodeError, KeyError):
-            pass
-
-    # Set env vars for langchain-google-genai Vertex AI mode
-    os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "true"
-    os.environ["GOOGLE_CLOUD_PROJECT"] = project or ""
-    os.environ["GOOGLE_CLOUD_LOCATION"] = os.environ.get("VERTEX_AI_LOCATION", "us-central1")
-
-    # Cleanup temp file on exit
-    atexit.register(lambda: os.unlink(creds_path) if os.path.exists(creds_path) else None)
-
-    print(
-        f"Vertex AI credentials loaded (project={project}, "
-        f"location={os.environ['GOOGLE_CLOUD_LOCATION']})",
-        file=sys.stderr,
-    )
+# Suppress noisy warnings
+warnings.filterwarnings("ignore", message=".*GOOGLE_API_KEY.*")
+warnings.filterwarnings("ignore", message=".*GEMINI_API_KEY.*")
 
 
 # ---------------------------------------------------------------------------
@@ -187,10 +136,38 @@ _shared_model = None
 
 
 def _get_shared_model():
-    """Return a shared ChatGoogleGenerativeAI instance (created once)."""
+    """Return a shared LangChain chat model instance (created once).
+
+    Auto-detects provider from env vars:
+        GEMINI_API_KEY   -> ChatGoogleGenerativeAI
+        OPENAI_API_KEY   -> ChatOpenAI
+        ANTHROPIC_API_KEY -> ChatAnthropic
+        (fallback)       -> ChatOllama
+    """
     global _shared_model
-    if _shared_model is None:
-        _shared_model = ChatGoogleGenerativeAI(model="gemini-2.5-flash")
+    if _shared_model is not None:
+        return _shared_model
+
+    if os.environ.get("GEMINI_API_KEY"):
+        from langchain_google_genai import ChatGoogleGenerativeAI
+        _shared_model = ChatGoogleGenerativeAI(
+            model="gemini-2.5-flash",
+            google_api_key=os.environ["GEMINI_API_KEY"],
+        )
+        print("  Linker agent: Gemini (google-generativeai)", file=sys.stderr)
+    elif os.environ.get("OPENAI_API_KEY"):
+        from langchain_openai import ChatOpenAI
+        _shared_model = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+        print("  Linker agent: OpenAI (gpt-4o-mini)", file=sys.stderr)
+    elif os.environ.get("ANTHROPIC_API_KEY"):
+        from langchain_anthropic import ChatAnthropic
+        _shared_model = ChatAnthropic(model="claude-haiku-4-5-latest", temperature=0)
+        print("  Linker agent: Anthropic (claude-haiku-4-5-latest)", file=sys.stderr)
+    else:
+        from langchain_ollama import ChatOllama
+        _shared_model = ChatOllama(model="llama3.1", temperature=0)
+        print("  Linker agent: Ollama (llama3.1)", file=sys.stderr)
+
     return _shared_model
 
 
@@ -255,8 +232,6 @@ def link_entity(
 # ---------------------------------------------------------------------------
 
 def main():
-    _init_vertex_credentials()
-
     test_cases = [
         ("python", "dedicated backend service builtWith Go, Node.js, Python"),
         ("backend", "dedicated backend service deployedOn container"),
@@ -270,7 +245,7 @@ def main():
     results = []
 
     print("\n" + "=" * 90)
-    print("  Agentic Wikidata Entity Linker (LangGraph + Gemini 2.5 Flash Lite)")
+    print("  Agentic Wikidata Entity Linker (LangGraph)")
     print("=" * 90 + "\n")
 
     for entity, context in test_cases:
