@@ -239,9 +239,117 @@ def extract_entities_from_ttl(ttl_paths: List[str]) -> List[str]:
 
     return sorted(labels)
 
+
+def extract_entity_contexts(ttl_paths: List[str]) -> Dict[str, str]:
+    """Extract neighboring triple context for each entity from .ttl files.
+
+    For each entity, collects the triples it participates in (as subject or
+    object) from reified KnowledgeTriple nodes. Returns a dict mapping
+    lowercased entity labels to a context string like:
+        'appears in triples: "clinical protocol hasPart condition", ...'
+
+    This context helps the Wikidata linker disambiguate generic labels.
+    """
+    from collections import defaultdict
+
+    # label -> set of "subject predicate object" strings
+    entity_triples: Dict[str, set] = defaultdict(set)
+
+    for path in ttl_paths:
+        g = Graph()
+        try:
+            g.parse(path, format='turtle')
+        except Exception as e:
+            print(f"Warning: could not parse {path}: {e}", file=sys.stderr)
+            continue
+
+        # Walk all KnowledgeTriple nodes and collect (subject_label, pred, object_label)
+        for triple_node in g.subjects(RDF.type, DEVKG.KnowledgeTriple):
+            pred_label = None
+            subj_label = None
+            obj_label = None
+
+            for p in g.objects(triple_node, DEVKG.triplePredicateLabel):
+                pred_label = str(p)
+                break
+            for s in g.objects(triple_node, DEVKG.tripleSubject):
+                for sl in g.objects(s, RDFS.label):
+                    subj_label = str(sl).strip()
+                    break
+                break
+            for o in g.objects(triple_node, DEVKG.tripleObject):
+                for ol in g.objects(o, RDFS.label):
+                    obj_label = str(ol).strip()
+                    break
+                break
+
+            if subj_label and pred_label and obj_label:
+                triple_str = f"{subj_label} {pred_label} {obj_label}"
+                entity_triples[subj_label.lower()].add(triple_str)
+                entity_triples[obj_label.lower()].add(triple_str)
+
+    # Build context strings (limit to 5 triples to keep prompt short)
+    MAX_CONTEXT_TRIPLES = 5
+    contexts = {}
+    for label, triples in entity_triples.items():
+        sample = sorted(triples)[:MAX_CONTEXT_TRIPLES]
+        quoted = ", ".join(f'"{t}"' for t in sample)
+        contexts[label] = f"appears in knowledge triples: {quoted}"
+
+    return contexts
+
 # ---------------------------------------------------------------------------
 # Core linking logic
 # ---------------------------------------------------------------------------
+
+DEFAULT_WORKERS = 8
+
+
+def _agentic_link_one(label: str, context: str = "developer knowledge graph entity") -> tuple:
+    """Call the agentic linker for a single entity. Thread-safe (no shared state).
+
+    Returns (label, qid, confidence, description, reasoning, elapsed) or
+    (label, None, 0.0, None, error_msg, 0.0) on failure.
+    """
+    from pipeline.agentic_linker_langgraph import link_entity as agentic_link_entity
+    try:
+        match_result, elapsed = agentic_link_entity(label, context=context)
+        return (label, match_result.qid, match_result.confidence,
+                match_result.description, match_result.reasoning, elapsed)
+    except Exception as e:
+        return (label, None, 0.0, None, str(e), 0.0)
+
+
+def _heuristic_link_one(label: str) -> tuple:
+    """Call the heuristic linker for a single entity. Thread-safe.
+
+    Returns (label, qid, confidence, description, aliases_list, ambiguous_qids).
+    """
+    results = search_wikidata(label)
+    match = select_best_match(label, results)
+
+    if not match:
+        return (label, None, 0.0, None, [], [])
+
+    qid = match['id']
+    description = match.get('description', 'N/A')
+
+    if match['label'].lower() == label.lower():
+        confidence = 1.0
+    elif any(kw in match.get('description', '').lower() for kw in TECH_KEYWORDS):
+        confidence = 0.8
+    else:
+        confidence = 0.5
+
+    alias_labels = match.get('aliases', [])[:5]
+
+    tech_matches = [r for r in results if any(
+        kw in r.get('description', '').lower() for kw in TECH_KEYWORDS
+    )]
+    ambiguous_qids = [r['id'] for r in tech_matches] if len(tech_matches) > 1 else []
+
+    return (label, qid, confidence, description, alias_labels, ambiguous_qids)
+
 
 def link_entity_list(
     entity_labels: List[str],
@@ -250,12 +358,25 @@ def link_entity_list(
     cache_conn: sqlite3.Connection,
     verbose: bool = True,
     agentic: bool = True,
+    max_workers: int = DEFAULT_WORKERS,
+    entity_contexts: Optional[Dict[str, str]] = None,
 ) -> None:
     """Link a list of entity labels to Wikidata and write RDF output.
 
     When agentic=True (default), uses the LangGraph ReAct agent for
     disambiguation. When False, falls back to heuristic matching.
+
+    Cache misses are resolved in parallel using a thread pool (default 8 workers).
+    Cache reads/writes and RDF graph writes remain sequential.
+
+    Args:
+        entity_contexts: Optional dict mapping lowercased entity labels to
+            context strings derived from neighboring triples. Passed to the
+            agentic linker to help disambiguate generic labels.
     """
+    from collections import defaultdict
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     g = create_graph()
     g.bind("wd", WD)
     g.bind("skos", SKOS)
@@ -269,22 +390,20 @@ def link_entity_list(
 
     if verbose:
         mode = "agentic (LangGraph)" if agentic else "heuristic"
-        print(f"Processing {len(entity_labels)} entities (mode: {mode})...")
+        print(f"Processing {len(entity_labels)} entities (mode: {mode}, workers: {max_workers})...")
+
+    # --- Phase 1: Process cache hits sequentially, collect misses ---
+    cache_misses = []  # (raw_label, label, uri)
 
     for raw_label in entity_labels:
-        # Alias normalization
         label = normalize_label(raw_label, aliases)
         if label != raw_label and verbose:
-            print(f"\n  alias: '{raw_label}' -> '{label}'")
-
-        if verbose:
-            print(f"\nSearching: {label}")
+            print(f"  alias: '{raw_label}' -> '{label}'")
 
         uri = entity_uri(label)
         g.add((uri, RDF.type, DEVKG.Entity))
         g.add((uri, RDFS.label, Literal(label, lang='en')))
 
-        # Check cache first
         cached = cache_get(cache_conn, label)
         if cached is not None:
             cached_hits += 1
@@ -297,28 +416,54 @@ def link_entity_list(
                     linked += 1
                     linked_pairs.append((uri, cached["qid"]))
                     if verbose:
-                        print(f"  [cache] {cached['qid']}: {cached['description']} (conf={confidence:.2f})")
+                        print(f"  [cache] {label}: {cached['qid']} (conf={confidence:.2f})")
                 else:
                     low_confidence += 1
                     if verbose:
-                        print(f"  [cache] {cached['qid']} below threshold (conf={confidence:.2f})", file=sys.stderr)
+                        print(f"  [cache] {label}: {cached['qid']} below threshold (conf={confidence:.2f})", file=sys.stderr)
             else:
                 unlinked += 1
                 if verbose:
-                    print(f"  [cache] not found")
-            continue
+                    print(f"  [cache] {label}: not found")
+        else:
+            cache_misses.append((raw_label, label, uri))
 
-        if agentic:
-            # --- Agentic linking via LangGraph ReAct agent ---
-            from pipeline.agentic_linker_langgraph import link_entity as agentic_link_entity
-            try:
-                match_result, elapsed = agentic_link_entity(label, context="developer knowledge graph entity")
-                qid = match_result.qid
-                confidence = match_result.confidence
-                description = match_result.description
+    if verbose:
+        print(f"\nCache: {cached_hits} hits, {len(cache_misses)} misses to resolve")
+
+    if not cache_misses:
+        # All from cache, skip to dedup + write
+        pass
+    elif agentic:
+        # --- Phase 2a: Parallel agentic linking ---
+        if verbose:
+            print(f"Launching {max_workers} parallel agent workers for {len(cache_misses)} entities...\n")
+
+        label_to_uri = {label: uri for _, label, uri in cache_misses}
+        labels_to_link = [label for _, label, _ in cache_misses]
+        _contexts = entity_contexts or {}
+
+        completed = 0
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_label = {
+                executor.submit(
+                    _agentic_link_one, label,
+                    _contexts.get(label.lower(), "developer knowledge graph entity"),
+                ): label
+                for label in labels_to_link
+            }
+
+            for future in as_completed(future_to_label):
+                label = future_to_label[future]
+                uri = label_to_uri[label]
+                completed += 1
+
+                result_label, qid, confidence, description, reasoning, elapsed = future.result()
 
                 if verbose:
-                    print(f"  agent: {qid} conf={confidence:.2f} ({elapsed:.1f}s) — {match_result.reasoning[:80]}")
+                    status = f"{qid} conf={confidence:.2f}" if qid and qid.lower() not in ("none", "error", "") else "none"
+                    reasoning_short = (reasoning or "")[:80]
+                    print(f"  [{completed}/{len(cache_misses)}] {label}: {status} ({elapsed:.1f}s) — {reasoning_short}")
 
                 if qid and qid.lower() not in ("none", "error", ""):
                     if confidence >= CONFIDENCE_THRESHOLD:
@@ -335,59 +480,56 @@ def link_entity_list(
                 else:
                     cache_put(cache_conn, label, None, None, 0.0)
                     unlinked += 1
-            except Exception as e:
-                print(f"  [error] agentic linking failed for '{label}': {e}", file=sys.stderr)
-                cache_put(cache_conn, label, None, None, 0.0)
-                unlinked += 1
-        else:
-            # --- Heuristic linking (original behavior) ---
-            results = search_wikidata(label)
-            match = select_best_match(label, results)
+    else:
+        # --- Phase 2b: Parallel heuristic linking ---
+        if verbose:
+            print(f"Launching {max_workers} parallel heuristic workers for {len(cache_misses)} entities...\n")
 
-            if match:
-                qid = match['id']
-                description = match.get('description', 'N/A')
+        label_to_uri = {label: uri for _, label, uri in cache_misses}
+        labels_to_link = [label for _, label, _ in cache_misses]
 
-                # Confidence: 1.0 for exact match, 0.8 for tech keyword, 0.5 fallback
-                if match['label'].lower() == label.lower():
-                    confidence = 1.0
-                elif any(kw in match.get('description', '').lower() for kw in TECH_KEYWORDS):
-                    confidence = 0.8
+        completed = 0
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_label = {
+                executor.submit(_heuristic_link_one, label): label
+                for label in labels_to_link
+            }
+
+            for future in as_completed(future_to_label):
+                label = future_to_label[future]
+                uri = label_to_uri[label]
+                completed += 1
+
+                result_label, qid, confidence, description, alias_labels, ambiguous_qids = future.result()
+
+                if qid:
+                    if confidence >= CONFIDENCE_THRESHOLD:
+                        wd_uri = WD[qid]
+                        g.add((uri, OWL.sameAs, wd_uri))
+                        g.add((uri, DCTERMS.description, Literal(description, lang='en')))
+                        linked += 1
+                        linked_pairs.append((uri, qid))
+
+                        for alias in alias_labels:
+                            g.add((uri, SKOS.altLabel, Literal(alias, lang='en')))
+                    else:
+                        low_confidence += 1
+                        print(f"  [low-conf] {label} -> {qid} conf={confidence:.2f}, skipped", file=sys.stderr)
+
+                    cache_put(cache_conn, label, qid, description, confidence)
+
+                    if verbose:
+                        print(f"  [{completed}/{len(cache_misses)}] {label}: {qid} (conf={confidence:.2f})")
+
+                    if ambiguous_qids:
+                        ambiguous.append((label, qid, ambiguous_qids))
                 else:
-                    confidence = 0.5
+                    cache_put(cache_conn, label, None, None, 0.0)
+                    unlinked += 1
+                    if verbose:
+                        print(f"  [{completed}/{len(cache_misses)}] {label}: not found")
 
-                if confidence >= CONFIDENCE_THRESHOLD:
-                    wd_uri = WD[qid]
-                    g.add((uri, OWL.sameAs, wd_uri))
-                    g.add((uri, DCTERMS.description, Literal(description, lang='en')))
-                    linked += 1
-                    linked_pairs.append((uri, qid))
-
-                    for alias in match.get('aliases', [])[:5]:
-                        g.add((uri, SKOS.altLabel, Literal(alias, lang='en')))
-                else:
-                    low_confidence += 1
-                    print(f"  [low-conf] {label} -> {qid} conf={confidence:.2f}, skipped", file=sys.stderr)
-
-                cache_put(cache_conn, label, qid, description, confidence)
-
-                if verbose:
-                    print(f"  -> {qid}: {description} (conf={confidence:.2f})")
-
-                # Ambiguity detection
-                tech_matches = [r for r in results if any(
-                    kw in r.get('description', '').lower() for kw in TECH_KEYWORDS
-                )]
-                if len(tech_matches) > 1:
-                    ambiguous.append((label, qid, [r['id'] for r in tech_matches]))
-            else:
-                cache_put(cache_conn, label, None, None, 0.0)
-                unlinked += 1
-                if verbose:
-                    print(f"  x not found")
-
-    # --- Entity deduplication: entities sharing the same QID ---
-    from collections import defaultdict
+    # --- Phase 3: Entity deduplication (entities sharing the same QID) ---
     qid_to_uris = defaultdict(list)
     for entity_uri_val, qid in linked_pairs:
         qid_to_uris[qid].append(entity_uri_val)
@@ -463,6 +605,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--heuristic", action="store_true",
         help="Use heuristic linking instead of agentic (LangGraph) linking",
     )
+    parser.add_argument(
+        "--workers", type=int, default=DEFAULT_WORKERS,
+        help=f"Number of parallel workers for cache misses (default: {DEFAULT_WORKERS})",
+    )
     return parser
 
 
@@ -492,6 +638,13 @@ def main():
             print("No entities with rdf:type devkg:Entity found.", file=sys.stderr)
             sys.exit(1)
 
+        # Extract triple-based context for disambiguation
+        if agentic and verbose:
+            print("Extracting entity contexts from triples...")
+        entity_contexts = extract_entity_contexts(args.ttl_inputs) if agentic else None
+        if agentic and verbose:
+            print(f"Contexts extracted for {len(entity_contexts)} entities")
+
         # Normalize through aliases and deduplicate
         normalized = list(dict.fromkeys(
             normalize_label(lbl, aliases) for lbl in labels
@@ -499,14 +652,17 @@ def main():
         if verbose:
             print(f"Found {len(labels)} raw entities, {len(normalized)} after alias normalization")
 
-        link_entity_list(normalized, args.output_path, aliases, cache_conn, verbose, agentic=agentic)
+        link_entity_list(normalized, args.output_path, aliases, cache_conn, verbose,
+                         agentic=agentic, max_workers=args.workers,
+                         entity_contexts=entity_contexts)
 
     # Legacy mode: positional args entity_file output_file
     elif args.entity_file and args.output_file_pos:
         with open(args.entity_file) as f:
             labels = [line.strip() for line in f if line.strip()]
 
-        link_entity_list(labels, args.output_file_pos, aliases, cache_conn, verbose, agentic=agentic)
+        link_entity_list(labels, args.output_file_pos, aliases, cache_conn, verbose,
+                         agentic=agentic, max_workers=args.workers)
 
     else:
         parser.print_help()

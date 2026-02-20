@@ -63,6 +63,7 @@ _PREDICATE_SET = set(PREDICATE_VOCABULARY.keys())
 STOPWORDS = {
     "command name", "exit", "yes", "no", "ok", "the", "it", "this",
     "that", "none", "null", "undefined", "true", "false", "n/a",
+    "[object object]", "object object",
 }
 
 
@@ -80,6 +81,24 @@ def is_valid_entity(name: str) -> bool:
         return False
     # Pure numbers
     if re.match(r"^\d+$", name):
+        return False
+    # IP addresses (e.g., 10.158.0.38, 192.168.1.1)
+    if re.match(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$", name):
+        return False
+    # Duration/measurement strings (e.g., "120 seconds", "120s", "500ms", "10mb", "50 mb limit")
+    if re.match(r"^\d+\s*(seconds?|minutes?|hours?|days?|ms|s|m|h|kb|mb|gb|tb)\b", name, re.IGNORECASE):
+        return False
+    # Hex strings / git hashes (e.g., "7f9ef80", "81b9518")
+    if re.match(r"^[0-9a-f]{6,}$", name, re.IGNORECASE):
+        return False
+    # Quantity phrases (e.g., "80 tests", "3 files", "10 endpoints")
+    if re.match(r"^\d+\s+\w+s$", name):
+        return False
+    # Ordinal phrases (e.g., "7th character extensions")
+    if re.match(r"^\d+(st|nd|rd|th)\b", name, re.IGNORECASE):
+        return False
+    # Fraction/ratio strings (e.g., "8/8h", "3/4")
+    if re.match(r"^\d+/\d+", name):
         return False
     # Reject phrases with 4+ words — entities should be 1-3 words
     if len(name.split()) > 3:
