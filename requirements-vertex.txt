@@ -1,0 +1,8 @@
+# Vertex AI — for batch prediction and GCS operations
+# Install with: pip install -r requirements-vertex.txt
+# Also includes Gemini provider since vertex_ai.py uses vertexai SDK
+
+-r requirements-gemini.txt
+google-cloud-aiplatform>=1.74.0
+google-cloud-storage>=2.14.0
+google-auth>=2.27.0

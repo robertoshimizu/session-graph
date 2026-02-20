@@ -1,265 +1,471 @@
-# Dev Knowledge Graph (DevKG)
+# session-graph
 
-A personal knowledge graph that extracts structured `(subject, predicate, object)` triples from AI coding sessions, links entities to Wikidata, and enables relationship queries via SPARQL — with full provenance back to the source conversation.
+**Turn your scattered AI coding sessions into a queryable knowledge graph.**
 
-## What You Get
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![RDF](https://img.shields.io/badge/data-RDF%2FTurtle-orange.svg)](https://www.w3.org/RDF/)
+[![SPARQL](https://img.shields.io/badge/query-SPARQL-green.svg)](https://www.w3.org/TR/sparql11-query/)
+[![Apache Jena Fuseki](https://img.shields.io/badge/triplestore-Apache%20Jena%20Fuseki-red.svg)](https://jena.apache.org/documentation/fuseki2/)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
-From raw session files (JSONL, JSON, SQLite), the pipeline produces:
+---
 
-- **Knowledge triples** — `FastAPI → uses → Pydantic`, `Neo4j → isTypeOf → graph database` — extracted by Gemini 2.5 Flash
-- **Wikidata links** — entities linked to Wikidata QIDs via `owl:sameAs` (agentic disambiguation with session context)
-- **Full provenance** — every triple traces back to the source message, session, platform, and file path
-- **SPARQL queryable** — loaded into Apache Jena Fuseki, queryable via Claude Code's `devkg-sparql` skill
+## The Problem
 
-### Current Scale
+Developers use 5+ AI tools every day -- Claude Code, ChatGPT, Cursor, Copilot, Grok, DeepSeek, Warp. Each session is an isolated silo. Knowledge dies when the tab closes.
+
+You have solved the same problem three times across different tools and cannot find any of them. You debugged a Supabase auth flow in Claude Code last Tuesday, discussed the same pattern in ChatGPT a month ago, and asked Grok about JWT refresh tokens somewhere in between. None of these tools talk to each other.
+
+Existing solutions are single-platform and flat-file. They give you search over one tool's history, not structured relationships across all of them. A grep over session logs does not tell you that `FastAPI uses Pydantic` or that `Neo4j is a type of graph database`. It just gives you walls of text.
+
+**session-graph** fixes this.
+
+## The Solution
+
+session-graph extracts structured knowledge triples -- `(subject, predicate, object)` -- from all your AI coding sessions, links entities to Wikidata for universal disambiguation, and loads everything into a SPARQL-queryable triplestore with full provenance back to the source conversation.
+
+```
+"What technologies have I used across all sessions?"  -->  SPARQL query  -->  structured answer
+"How does FastAPI relate to Pydantic?"                 -->  FastAPI --uses--> Pydantic
+"What sessions discussed authentication?"              -->  3 sessions across Claude Code + DeepSeek
+```
+
+The key insight: **a knowledge graph without relationships is just a tag cloud.** The minimum viable extraction unit is `(subject, predicate, object)`, not `[topic1, topic2, topic3]`.
+
+### What makes this different
+
+- **Multi-platform**: Ingests Claude Code, ChatGPT, DeepSeek, Grok, and Warp into a single unified graph. No other tool does this.
+- **Formal ontology**: Composes 5 W3C/ISO standards (PROV-O, SIOC, SKOS, Dublin Core, Schema.org) instead of inventing a custom schema.
+- **Wikidata linking**: Entities are disambiguated against 100M+ Wikidata items via `owl:sameAs`. "k8s", "kubernetes", and "K8s" all resolve to [Q22661306](https://www.wikidata.org/wiki/Q22661306).
+- **Full provenance**: Every knowledge triple traces back to the exact source message, session, platform, and file path.
+- **Federated queries**: SPARQL can query your local graph and Wikidata in a single query.
+
+## Results
+
+From real-world usage across 52 sessions:
 
 | Metric | Value |
 |--------|-------|
-| Triples in Fuseki | 138,802 |
-| Claude Code sessions indexed | 52 |
-| Knowledge triples | ~2,500+ |
+| Total triples in Fuseki | 138,802 |
+| Sessions indexed | 52 |
+| Knowledge triples extracted | ~2,500+ |
 | Distinct entities | ~4,600+ |
 | Wikidata-linked entities | ~33% |
-| Platforms supported | Claude Code, DeepSeek, Grok, Warp |
+| Curated predicates | 24 (with <1% `relatedTo` fallback) |
+| Platforms supported | 4 (Claude Code, DeepSeek, Grok, Warp) |
+| Entity linking precision | 7/7 (agentic ReAct linker) |
+| Cost per 600 sessions | ~$0.60 (Vertex AI batch pricing) |
+
+### Graph Preview
+
+Real data from SPARQL — technologies, concepts, and session provenance linked across multiple Claude Code sessions:
+
+![Knowledge Graph Preview](docs/graph-preview.png)
+
+*Hub nodes (large blue) are highly connected technologies. Green nodes are concepts/outputs. Purple rectangles are session IDs with dashed provenance edges. The "W" badge indicates entities linked to Wikidata.*
+
+## Architecture
+
+```
+Scattered Sources              Adapter Layer           Knowledge Graph
+-----------------              -------------           ---------------
+Claude Code (.jsonl)  --+
+DeepSeek (.json zip)  --+     triple_extraction.py
+Grok (.json zip)      --+--->  (LLM extracts s,p,o   ---> Apache Jena Fuseki
+Warp (SQLite)         --+      from each assistant         (SPARQL endpoint)
+ChatGPT (planned)     --+      message using 24                 |
+Cursor (planned)      --+      curated predicates)              |
+                                     |                          v
+                                     v                    SPARQL Queries
+                            link_entities.py           (14 local templates
+                             (LangGraph ReAct           + 6 Wikidata templates)
+                              agent links to                    |
+                              Wikidata QIDs)                    v
+                                                        Claude Code Skill
+                                                     (natural language -> SPARQL)
+```
+
+### Pipeline in Detail
+
+```
+1. SOURCE PARSING (per platform --> RDF Turtle)
+   Each parser reads a platform-specific format and produces
+   PROV-O + SIOC session structure plus knowledge triples.
+
+2. TRIPLE EXTRACTION (LLM-powered)
+   Each assistant message --> LLM --> (subject, predicate, object) triples
+   24 curated predicates | stopword filter | entity length filter (1-3 words)
+   Retry on JSON truncation | closed-world vocabulary (deviations fuzzy-matched)
+
+3. ENTITY LINKING (context-aware, agentic)
+   For each entity:
+   +-- Normalize via entity_aliases.json (161 mappings: k8s-->kubernetes, etc.)
+   +-- Check SQLite cache
+   +-- If miss --> LangGraph ReAct agent (LLM + Wikidata API tool)
+   +-- Confidence threshold 0.7 --> owl:sameAs link
+   +-- Entity dedup: same QID --> owl:sameAs between aliases
+
+4. LOAD --> Apache Jena Fuseki (SPARQL endpoint)
+
+5. QUERY --> SPARQL (via Claude Code skill or directly)
+```
 
 ## Supported Platforms
 
-| Source | Format | Parser |
-|--------|--------|--------|
-| **Claude Code** | JSONL (`~/.claude/projects/**/*.jsonl`) | `jsonl_to_rdf.py` |
-| **DeepSeek** | JSON zip export | `deepseek_to_rdf.py` |
-| **Grok** | JSON (MongoDB export) | `grok_to_rdf.py` |
-| **Warp** | SQLite | `warp_to_rdf.py` |
-| Cursor | SQLite | Not yet built |
-| VS Code Copilot | JSON | Not yet built |
-| ChatGPT | JSON export | Not yet built |
+| Platform | Parser | Format | Status |
+|----------|--------|--------|--------|
+| Claude Code | `jsonl_to_rdf.py` | JSONL | Production |
+| DeepSeek | `deepseek_to_rdf.py` | JSON zip export | Production |
+| Grok | `grok_to_rdf.py` | JSON (MongoDB export) | Production |
+| Warp | `warp_to_rdf.py` | SQLite | Production |
+| ChatGPT | -- | JSON export | Planned |
+| Cursor | -- | SQLite / Markdown | Planned |
+| VS Code Copilot | -- | JSON | Planned |
 
 All parsers produce the same RDF schema. Entities merge by label across platforms.
 
-## Prerequisites
-
-- Python 3.11+ with virtualenv
-- Google Cloud service account with Vertex AI access (for Gemini 2.5 Flash)
-- [Apache Jena Fuseki](https://jena.apache.org/documentation/fuseki2/) (for SPARQL queries)
-
-## Setup
+## Quick Start
 
 ```bash
-cd dev-knowledge-graph
+# 1. Clone
+git clone https://github.com/your-username/session-graph.git
+cd session-graph
+
+# 2. Configure
+cp .env.example .env
+# Edit .env with your LLM provider API key (see Provider Support below)
+
+# 3. Install
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
+
+# 4. Start Fuseki (pick one)
+docker run -d --name fuseki -p 3030:3030 stain/jena-fuseki  # Docker
+# OR download from https://jena.apache.org/download/ and run ./fuseki-server
+
+# 5. Process a single session
+python -m pipeline.jsonl_to_rdf path/to/session.jsonl output/session.ttl
+
+# 6. Link entities to Wikidata
+PYTHONUNBUFFERED=1 python -m pipeline.link_entities \
+  --input output/*.ttl --output output/wikidata_links.ttl
+
+# 7. Load into Fuseki
+python -m pipeline.load_fuseki output/*.ttl
+
+# 8. Query at http://localhost:3030
 ```
 
-Create `.env`:
-```env
-GOOGLE_APPLICATION_CREDENTIALS_BASE64=<base64-encoded-service-account-json>
-GOOGLE_CLOUD_PROJECT=<your-project-id>
-```
+### Bulk Processing
 
-## Running the Pipeline
-
-### Recommended: Batch Pipeline (fastest, cheapest)
-
-Three decoupled steps — Vertex AI handles parallelism, 50% cost discount:
+For processing many sessions at once:
 
 ```bash
-# Step 1: Submit batch job (uploads all unprocessed sessions to Vertex AI)
-.venv/bin/python -m pipeline.bulk_batch submit --sort newest
+# Option A: Batch (50% cheaper, parallel via Vertex AI)
+python -m pipeline.bulk_batch submit --sort newest
+python -m pipeline.bulk_batch status --wait --poll-interval 60
+python -m pipeline.bulk_batch collect
 
-# Step 2: Wait for completion (poll every 60s)
-.venv/bin/python -m pipeline.bulk_batch status --wait --poll-interval 60
+# Option B: Sequential (simpler, one session at a time)
+python -m pipeline.bulk_process --limit 50 --sort newest --skip-linking
 
-# Step 3: Collect results → .ttl files
-.venv/bin/python -m pipeline.bulk_batch collect
-
-# Step 4: Link entities to Wikidata (parallel, 8 workers by default)
-PYTHONUNBUFFERED=1 .venv/bin/python -m pipeline.link_entities \
-  --input output/claude/*.ttl --output output/claude/wikidata_links.ttl \
-  --workers 8
-
-# Step 5: Load into Fuseki
-cd ~/opt/apache-jena-fuseki && ./fuseki-server &
-.venv/bin/python pipeline/load_fuseki.py output/claude/*.ttl
-```
-
-Use `--limit N` on the submit step to cap the number of sessions.
-
-### Alternative: Sequential Pipeline (simpler, full price)
-
-Processes one session at a time with real-time Gemini calls. Useful for small runs or debugging:
-
-```bash
-# Extract triples (skip entity linking, run it separately with --workers)
-.venv/bin/python -m pipeline.bulk_process --limit 50 --sort newest --skip-linking
-
-# Then link entities in parallel
-PYTHONUNBUFFERED=1 .venv/bin/python -m pipeline.link_entities \
-  --input output/claude/*.ttl --output output/claude/wikidata_links.ttl \
-  --workers 8
+# Then link entities in parallel (both options)
+PYTHONUNBUFFERED=1 python -m pipeline.link_entities \
+  --input output/claude/*.ttl --output output/claude/wikidata_links.ttl --workers 8
 
 # Load into Fuseki
-.venv/bin/python pipeline/load_fuseki.py output/claude/*.ttl
-```
-
-### Pipeline Comparison
-
-| | **Batch** (`bulk_batch`) | **Sequential** (`bulk_process`) |
-|---|---|---|
-| Triple extraction | Vertex AI processes all sessions in parallel | One session at a time, one API call per message |
-| Cost | **50% discount** (Batch Prediction API) | Full price |
-| Latency | Submit + wait (minutes to hours) | Immediate, but slow overall |
-| Best for | Production runs, large volumes | Debugging, small runs (< 5 sessions) |
-
-Both pipelines use the same watermarks — already-processed sessions are skipped automatically.
-
-### Single Session
-
-```bash
-# Full extraction
-.venv/bin/python -m pipeline.jsonl_to_rdf <session.jsonl> output/result.ttl
-
-# Structure only (no Gemini calls)
-.venv/bin/python -m pipeline.jsonl_to_rdf <session.jsonl> output/result.ttl --skip-extraction
+python -m pipeline.load_fuseki output/claude/*.ttl
 ```
 
 ### Other Platforms
 
 ```bash
-.venv/bin/python -m pipeline.deepseek_to_rdf external_knowledge/deepseek_data.zip output/deepseek.ttl --conversation 0
-.venv/bin/python -m pipeline.grok_to_rdf external_knowledge/grok_data.zip output/grok.ttl --conversation 0
-.venv/bin/python -m pipeline.warp_to_rdf output/warp.ttl --conversation 0 --min-exchanges 5
+python -m pipeline.deepseek_to_rdf data/deepseek_export.zip output/deepseek.ttl
+python -m pipeline.grok_to_rdf data/grok_export.zip output/grok.ttl
+python -m pipeline.warp_to_rdf output/warp.ttl --min-exchanges 5
 ```
 
-### Inspect Intermediate Results
+## Why RDF/SPARQL?
 
-If entity linking is running (can take hours for thousands of entities), inspect progress without interrupting:
+Most developer tools reach for Neo4j, vector databases, or JSON files. Here is why session-graph uses RDF and SPARQL instead.
 
-```bash
-.venv/bin/python -m pipeline.snapshot_links \
-  --input output/claude/*.ttl --output output/claude/wikidata_links_snapshot.ttl
+### Formal ontology composition
+
+session-graph does not invent a custom schema. It composes 5 battle-tested W3C/ISO standards:
+
+| Standard | Role | Maturity |
+|----------|------|----------|
+| **PROV-O** | Provenance: who did what, when, derived from what | W3C Recommendation |
+| **SIOC** | Conversation structure: messages, threads, containers | W3C Member Submission |
+| **SKOS** | Taxonomy: topics, broader/narrower hierarchies | W3C Recommendation |
+| **Dublin Core** | Metadata: dates, titles, creators | ISO 15836 |
+| **Schema.org** | Cherry-pick: `SoftwareSourceCode` | De facto standard |
+
+This same composition approach was validated by IBM's [GRAPH4CODE](https://arxiv.org/abs/2002.09440) project at 2 billion triples.
+
+### Wikidata linking
+
+Every entity in the graph can be linked to Wikidata via `owl:sameAs`. This gives you:
+
+- **Universal disambiguation**: "k8s", "kubernetes", and "K8s" all resolve to the same Wikidata item.
+- **Cross-language dedup**: "medication" and "medicamento" both map to [Q12140](https://www.wikidata.org/wiki/Q12140).
+- **External enrichment**: Query Wikidata to discover that Neo4j is written in Java, or that fosfomycin is an antibiotic -- knowledge that does not exist in your local sessions.
+
+### Lightweight triplestore
+
+Apache Jena Fuseki runs as a single JAR file. No JVM tuning required. It handles 138K+ triples without breaking a sweat. Compare this to Neo4j (Docker + plugins + configuration) or a hosted vector database (monthly fees).
+
+### Federated queries
+
+SPARQL's `SERVICE` keyword lets you query your local graph and Wikidata in a single request:
+
+```sparql
+# Find what Wikidata knows about entities in your local graph
+SELECT ?localLabel ?wikidataDescription WHERE {
+  ?entity a devkg:Entity ;
+          rdfs:label ?localLabel ;
+          owl:sameAs ?wd .
+  SERVICE <https://query.wikidata.org/sparql> {
+    ?wd schema:description ?wikidataDescription .
+    FILTER(LANG(?wikidataDescription) = "en")
+  }
+}
 ```
 
-## Querying the Knowledge Graph
+No other query language can do this.
 
-### Via Claude Code (recommended)
+### Provenance built-in
 
-The `devkg-sparql` skill teaches Claude Code to query Fuseki directly. Just ask natural language questions:
+PROV-O gives you provenance for free. Every knowledge triple links back to:
+- The exact **message** it was extracted from (with full text)
+- The **session** it belongs to
+- The **platform** (Claude Code, DeepSeek, Grok, Warp)
+- The **source file** on disk
 
-- "What do we know about FastAPI?"
-- "What sessions discussed authentication?"
-- "How does Neo4j relate to knowledge graphs?"
-- "What are the most connected entities?"
+### No vendor lock-in
 
-### Via SPARQL directly
+RDF is an ISO standard (W3C). Your data is portable. You can move it to any triplestore (Fuseki, Blazegraph, GraphDB, Stardog, Amazon Neptune) or convert it to Neo4j via n10s. Try doing that with a proprietary vector database.
 
-Query at `http://localhost:3030` (Fuseki UI) or via curl:
+## Provider Support
 
-```bash
-# Hub detection — most connected entities
-curl -s -X POST 'http://localhost:3030/devkg/sparql' \
-  -H 'Accept: application/sparql-results+json' \
-  --data-urlencode "query=PREFIX devkg: <http://devkg.local/ontology#>
-PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+session-graph supports multiple LLM providers for triple extraction and entity linking:
+
+| Provider | Triple Extraction | Entity Linking | Batch Processing |
+|----------|-------------------|----------------|------------------|
+| Google Gemini (Vertex AI) | Yes | Yes | Yes (50% discount) |
+| Google Gemini (AI Studio) | Yes | Yes | No |
+| OpenAI | Yes | Yes | No |
+| Anthropic (Claude) | Yes | Yes | No |
+| Ollama (local) | Yes | Yes | No |
+
+Configure your provider in `.env`:
+
+```env
+# Pick one:
+PROVIDER=gemini-vertex    # Google Vertex AI (supports batch)
+PROVIDER=gemini           # Google AI Studio
+PROVIDER=openai           # OpenAI API
+PROVIDER=anthropic        # Anthropic API
+PROVIDER=ollama           # Local Ollama
+```
+
+## Example SPARQL Queries
+
+### What technologies have I used across all sessions?
+
+```sparql
+PREFIX devkg: <http://devkg.local/ontology#>
+PREFIX rdfs:  <http://www.w3.org/2000/01/rdf-schema#>
+
 SELECT ?label (COUNT(DISTINCT ?triple) AS ?degree) WHERE {
-  { ?triple a devkg:KnowledgeTriple ; devkg:tripleSubject ?e . ?e rdfs:label ?label . FILTER(LANG(?label) = \"\") }
+  { ?triple a devkg:KnowledgeTriple ; devkg:tripleSubject ?e .
+    ?e rdfs:label ?label . FILTER(LANG(?label) = "") }
   UNION
-  { ?triple a devkg:KnowledgeTriple ; devkg:tripleObject ?e . ?e rdfs:label ?label . FILTER(LANG(?label) = \"\") }
-} GROUP BY ?label ORDER BY DESC(?degree) LIMIT 20" \
-  | jq -r '.results.bindings[] | [.label.value, .degree.value] | @tsv'
+  { ?triple a devkg:KnowledgeTriple ; devkg:tripleObject ?e .
+    ?e rdfs:label ?label . FILTER(LANG(?label) = "") }
+}
+GROUP BY ?label
+ORDER BY DESC(?degree)
+LIMIT 20
 ```
 
-See `pipeline/sample_queries.sparql` for 14 query templates. See `.claude/skills/devkg-sparql/SKILL.md` for the full reference (14 local + 6 Wikidata templates).
+This returns the most connected entities in your graph -- the core technologies and concepts across all your sessions.
 
-## How It Works
+### How does FastAPI relate to Pydantic?
 
+```sparql
+PREFIX devkg: <http://devkg.local/ontology#>
+PREFIX rdfs:  <http://www.w3.org/2000/01/rdf-schema#>
+PREFIX sioc:  <http://rdfs.org/sioc/ns#>
+
+SELECT DISTINCT ?predicate (SUBSTR(?content, 1, 150) AS ?sourceSnippet) WHERE {
+  ?triple a devkg:KnowledgeTriple ;
+          devkg:tripleSubject ?s ;
+          devkg:triplePredicateLabel ?predicate ;
+          devkg:tripleObject ?o ;
+          devkg:extractedFrom ?msg .
+  ?s rdfs:label ?sLabel .
+  ?o rdfs:label ?oLabel .
+  OPTIONAL { ?msg sioc:content ?content }
+  FILTER(
+    CONTAINS(LCASE(STR(?sLabel)), "fastapi") &&
+    CONTAINS(LCASE(STR(?oLabel)), "pydantic")
+  )
+}
 ```
-1. SOURCE PARSING (per platform → RDF Turtle)
-   Claude Code .jsonl  →  jsonl_to_rdf.py  →  .ttl
-   Each assistant message → Gemini 2.5 Flash → (subject, predicate, object) triples
-   24 curated predicates (uses, dependsOn, enables, implements, etc.)
 
-2. ENTITY LINKING (context-aware, agentic)
-   .ttl files → link_entities.py → wikidata_links.ttl
-   For each entity:
-   ├── Extract neighboring triples as disambiguation context
-   ├── LangGraph ReAct agent (Gemini + Wikidata API tool)
-   ├── Confidence threshold 0.7 → owl:sameAs link
-   └── SQLite cache (incremental, survives restarts)
+Result: `FastAPI --uses--> Pydantic`, with a snippet from the source conversation.
 
-3. LOAD → Apache Jena Fuseki (SPARQL endpoint)
+### What entities appear across multiple platforms?
 
-4. QUERY → SPARQL (via Claude Code skill or directly)
+```sparql
+PREFIX devkg: <http://devkg.local/ontology#>
+PREFIX rdfs:  <http://www.w3.org/2000/01/rdf-schema#>
+
+SELECT ?label (GROUP_CONCAT(DISTINCT ?platform; separator=", ") AS ?platforms)
+       (COUNT(DISTINCT ?platform) AS ?platformCount) WHERE {
+  ?triple a devkg:KnowledgeTriple ;
+          devkg:tripleSubject ?e ;
+          devkg:extractedInSession ?session .
+  ?session devkg:hasSourcePlatform ?platform .
+  ?e rdfs:label ?label .
+}
+GROUP BY ?label
+HAVING(COUNT(DISTINCT ?platform) > 1)
+ORDER BY DESC(?platformCount)
 ```
 
-### Deduplication & Incremental Processing
+This reveals knowledge that spans platforms -- things you discussed in both Claude Code and DeepSeek, for example.
 
-- **Watermarks**: `bulk_process.py` tracks processed sessions by SHA256 hash in `output/watermarks.json`. Re-running skips already-processed sessions.
-- **Subagent filtering**: Subagent `.jsonl` files are excluded by default to avoid 76% knowledge triple duplication.
-- **Entity cache**: Wikidata lookups cached in `pipeline/.entity_cache.db` (SQLite). Only cache misses trigger the ReAct agent.
-- **Entity dedup**: Entities sharing the same Wikidata QID get `owl:sameAs` to each other.
+### Federated query: What is Kubernetes according to Wikidata?
+
+```sparql
+PREFIX devkg: <http://devkg.local/ontology#>
+PREFIX rdfs:  <http://www.w3.org/2000/01/rdf-schema#>
+PREFIX owl:   <http://www.w3.org/2002/07/owl#>
+PREFIX wd:    <http://www.wikidata.org/entity/>
+
+SELECT ?label ?wikidataURI WHERE {
+  ?entity a devkg:Entity ;
+          rdfs:label ?label ;
+          owl:sameAs ?wikidataURI .
+  FILTER(STRSTARTS(STR(?wikidataURI), "http://www.wikidata.org"))
+  FILTER(CONTAINS(LCASE(STR(?label)), "kubernetes"))
+}
+```
+
+The full SPARQL skill includes 14 local query templates and 6 Wikidata traversal templates. See [`pipeline/sample_queries.sparql`](pipeline/sample_queries.sparql) for the complete reference.
 
 ## Ontology
 
-Five W3C/ISO standards composed, plus 24 curated DevKG predicates:
+session-graph composes 5 W3C/ISO standards into a minimal OWL ontology with 24 curated predicates for developer knowledge:
 
-| Standard | Role |
-|----------|------|
-| **PROV-O** | Provenance: who did what, when, derived from what |
-| **SIOC** | Conversation: messages, threads, containers |
-| **SKOS** | Taxonomy: topics, broader/narrower hierarchies |
-| **Dublin Core** | Metadata: dates, titles, creators |
-| **Schema.org** | Cherry-pick: `SoftwareSourceCode` |
+```turtle
+@prefix prov:    <http://www.w3.org/ns/prov#> .
+@prefix sioc:    <http://rdfs.org/sioc/ns#> .
+@prefix skos:    <http://www.w3.org/2004/02/skos/core#> .
+@prefix dcterms: <http://purl.org/dc/terms/> .
+@prefix schema:  <http://schema.org/> .
+@prefix devkg:   <http://devkg.local/ontology#> .
 
-**24 predicates**: `uses`, `dependsOn`, `enables`, `isPartOf`, `hasPart`, `implements`, `extends`, `alternativeTo`, `solves`, `produces`, `configures`, `composesWith`, `provides`, `requires`, `isTypeOf`, `builtWith`, `deployedOn`, `storesIn`, `queriedWith`, `integratesWith`, `broader`, `narrower`, `relatedTo`, `servesAs`
+# A session is both a PROV Activity (provenance) and a SIOC Forum (conversation)
+ex:session-001 a prov:Activity, sioc:Forum ;
+    dcterms:created "2026-02-13T14:30:00Z"^^xsd:dateTime ;
+    dcterms:title "Debugging auth flow" ;
+    prov:wasAssociatedWith ex:developer, ex:agent-claude-code .
 
-Full ontology reference: [DEVKG_ONTOLOGY.md](DEVKG_ONTOLOGY.md) | Visual schema: [ontology/devkg_schema.png](ontology/devkg_schema.png)
+# A message in that session
+ex:message-001 a sioc:Post, prov:Entity ;
+    sioc:has_container ex:session-001 ;
+    sioc:content "How do I handle JWT refresh?" ;
+    prov:wasGeneratedBy ex:session-001 .
+
+# An extracted knowledge triple with full provenance
+ex:triple-001 a devkg:KnowledgeTriple ;
+    devkg:tripleSubject ex:entity-fastapi ;
+    devkg:triplePredicateLabel "uses" ;
+    devkg:tripleObject ex:entity-pydantic ;
+    devkg:extractedFrom ex:message-042 ;
+    devkg:extractedInSession ex:session-001 .
+```
+
+### The 24 Predicates
+
+Closed-world design: the LLM is constrained to use only these predicates. Any deviation is fuzzy-matched to the closest one (fallback: `relatedTo`, kept under 1%).
+
+| Category | Predicates |
+|----------|-----------|
+| **Dependencies** | `uses`, `dependsOn`, `requires`, `builtWith` |
+| **Capabilities** | `enables`, `provides`, `solves`, `produces` |
+| **Structure** | `isPartOf`, `hasPart`, `extends`, `implements` |
+| **Taxonomy** | `isTypeOf`, `broader`, `narrower` |
+| **Infrastructure** | `deployedOn`, `storesIn`, `queriedWith`, `configures` |
+| **Relationships** | `integratesWith`, `composesWith`, `alternativeTo`, `servesAs`, `relatedTo` |
+
+Full ontology: [`ontology/devkg.ttl`](ontology/devkg.ttl)
 
 ## Project Structure
 
 ```
-dev-knowledge-graph/
-├── ontology/devkg.ttl                # OWL ontology (24 predicates)
-├── pipeline/
-│   ├── common.py                     # Shared RDF logic (namespaces, URI helpers)
-│   ├── vertex_ai.py                  # Vertex AI auth (base64 creds → temp file)
-│   ├── triple_extraction.py          # Gemini prompt + extraction + normalization
-│   ├── jsonl_to_rdf.py               # Claude Code JSONL → RDF
-│   ├── deepseek_to_rdf.py            # DeepSeek JSON → RDF
-│   ├── grok_to_rdf.py                # Grok JSON → RDF
-│   ├── warp_to_rdf.py                # Warp SQLite → RDF
-│   ├── link_entities.py              # Wikidata entity linking (context-aware, agentic)
-│   ├── agentic_linker_langgraph.py   # LangGraph ReAct agent for disambiguation
-│   ├── entity_aliases.json           # 161 tech synonym mappings
-│   ├── bulk_process.py               # Sequential bulk processor (watermarks, --sort, --limit)
-│   ├── bulk_batch.py                 # Vertex AI Batch Prediction (50% cheaper)
-│   ├── batch_extraction.py           # Batch job helpers
-│   ├── snapshot_links.py             # Inspect intermediate entity linking (read-only)
-│   ├── load_fuseki.py                # Upload .ttl to Fuseki
-│   ├── sample_queries.sparql         # 14 SPARQL query templates
-│   └── .entity_cache.db              # SQLite cache for Wikidata links (auto-created)
-├── .claude/skills/devkg-sparql/      # SPARQL skill for Claude Code
-├── output/claude/                    # Generated .ttl files per session
-├── external_knowledge/               # DeepSeek/Grok exports
-├── research/                         # Entity linking research docs
-└── requirements.txt
+session-graph/
++-- ontology/devkg.ttl                    # OWL ontology (24 predicates)
++-- pipeline/
+|   +-- common.py                         # Shared: namespaces, URI helpers
+|   +-- llm_providers.py                   # LLM provider abstraction (Gemini, OpenAI, Anthropic, Ollama)
+|   +-- triple_extraction.py              # LLM prompt, extraction, normalization
+|   +-- jsonl_to_rdf.py                   # Claude Code JSONL --> RDF
+|   +-- deepseek_to_rdf.py                # DeepSeek JSON --> RDF
+|   +-- grok_to_rdf.py                    # Grok JSON --> RDF
+|   +-- warp_to_rdf.py                    # Warp SQLite --> RDF
+|   +-- link_entities.py                  # Wikidata entity linking (agentic)
+|   +-- agentic_linker_langgraph.py       # LangGraph ReAct agent
+|   +-- entity_aliases.json               # 161 tech synonym mappings
+|   +-- bulk_process.py                   # Sequential bulk processor
+|   +-- bulk_batch.py                     # Vertex AI Batch Prediction
+|   +-- snapshot_links.py                 # Inspect entity linking progress
+|   +-- load_fuseki.py                    # Upload .ttl to Fuseki
+|   +-- sample_queries.sparql             # 14 SPARQL query templates
+|   +-- .entity_cache.db                  # SQLite cache (auto-created)
++-- .claude/skills/devkg-sparql/          # SPARQL skill for Claude Code
++-- output/                               # Generated .ttl files
++-- requirements.txt
++-- .env.example
++-- LICENSE
 ```
+
+## Adding a New Parser
+
+To add support for a new AI platform, implement a parser that reads the platform's native format and produces an `rdflib.Graph` with the same schema.
+
+The key contract:
+
+1. Create sessions as `devkg:Session` (subclass of `prov:Activity` + `sioc:Forum`)
+2. Create messages as `devkg:UserMessage` or `devkg:AssistantMessage`
+3. Call `triple_extraction.extract_triples(text)` on each assistant message
+4. Use `common.py` helpers for URI generation and namespace management
+
+See any existing parser (e.g., `pipeline/jsonl_to_rdf.py`) as a template. The shared modules handle all RDF construction, triple extraction, and entity normalization.
 
 ## Cost
 
 | Component | Cost |
 |-----------|------|
-| Triple extraction | ~$0.60 / 600 sessions (Vertex AI batch, 50% discount) |
-| Entity linking | ~$0.10 / 1000 entities (Gemini 2.5 Flash) |
-| Fuseki | Free (local) |
-| Wikidata API | Free (no auth required for reads) |
+| Triple extraction (batch) | ~$0.60 / 600 sessions |
+| Triple extraction (real-time) | ~$1.20 / 600 sessions |
+| Entity linking | ~$0.10 / 1,000 entities |
+| Apache Jena Fuseki | Free (local) |
+| Wikidata API | Free (no auth required) |
+| **Total for 600 sessions** | **~$0.70 - $1.30** |
+
+The entire pipeline runs for less than $2 on a typical developer's full session history.
 
 ## Key Design Decisions
 
-- **Assistant-only extraction** — user messages are short prompts with no extractable knowledge
-- **Closed-world predicates** — LLM constrained to 24 predicates; deviations fuzzy-matched (fallback: `relatedTo` < 1%)
-- **Context-aware entity linking** — neighboring KnowledgeTriple relationships passed as disambiguation context to the ReAct agent (e.g., "condition" resolves to disease, not programming conditional)
-- **Dual storage** — direct edges for fast traversal + reified KnowledgeTriple nodes for provenance
-- **Agentic linker over heuristic** — LangGraph ReAct agent achieves 7/7 precision vs ~50% for keyword heuristic
+- **Assistant-only extraction**: Only assistant messages are sent to the LLM for triple extraction. User messages are short prompts with no extractable knowledge.
+- **Closed-world predicates**: The LLM is constrained to 24 predicates. The prompt includes wrong/correct examples to keep `relatedTo` fallback under 1%.
+- **Dual storage**: Direct edges for fast graph traversal AND reified `KnowledgeTriple` nodes for provenance. Query either depending on your needs.
+- **Context-aware entity linking**: Neighboring KnowledgeTriple relationships are passed as disambiguation context to the ReAct agent. "condition" resolves to disease (not programming conditional) when surrounded by medical triples.
+- **Agentic linker over heuristic**: LangGraph ReAct agent (LLM + Wikidata API tool) achieves 7/7 precision vs ~50% for keyword heuristic. Resolves abbreviations like k8s, otel, tf.
 
 ## Lessons Learned
 
@@ -269,5 +475,22 @@ dev-knowledge-graph/
 > **Put the schema in the prompt, not in post-processing.**
 > If you want the LLM to use specific predicates, give it the vocabulary explicitly with examples.
 
-> **"It loads" ≠ "it answers questions."**
+> **"It loads" does not mean "it answers questions."**
 > Always verify with semantic queries, not just structural ones.
+
+## References
+
+- [GRAPH4CODE](https://arxiv.org/abs/2002.09440) (IBM Research) -- 2B triples, same ontology composition approach
+- [PROV-O: The PROV Ontology](https://www.w3.org/TR/prov-o/) -- W3C Recommendation
+- [SIOC Core Ontology](http://rdfs.org/sioc/spec/) -- Semantically-Interlinked Online Communities
+- [SKOS Reference](https://www.w3.org/TR/skos-reference/) -- Simple Knowledge Organization System
+- [Apache Jena Fuseki](https://jena.apache.org/documentation/fuseki2/) -- SPARQL server
+- [LangGraph](https://github.com/langchain-ai/langgraph) -- Agent orchestration framework
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on adding parsers, improving extraction, and submitting pull requests.
+
+## License
+
+[Apache License 2.0](LICENSE)

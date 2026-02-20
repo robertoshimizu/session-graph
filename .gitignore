@@ -5,6 +5,7 @@
 .venv/
 __pycache__/
 *.pyc
+*.egg-info/
 
 # macOS
 .DS_Store
@@ -21,3 +22,9 @@ output/
 
 # Binary data exports
 external_knowledge/
+
+# Internal directories (not part of the public project)
+cognee_eval/
+research/
+daemon/
+hooks/

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Gemini Batch Prediction for knowledge triple extraction.
 
-Tests batch mode on a sample of messages collected from parser outputs.
-Uses Vertex AI Batch Prediction API with Gemini 2.5 Flash.
+NOTE: This module is OPTIONAL and requires Google Cloud Platform (GCP) credentials.
+It uses the Vertex AI Batch Prediction API directly and does not go through the
+generic llm_providers abstraction. See bulk_batch.py for the main batch pipeline.
 
 Usage:
     # Collect messages from .ttl files and run batch extraction
@@ -17,6 +18,7 @@ Prerequisites:
 """
 
 import json
+import os
 import sys
 import time
 import argparse
@@ -220,9 +222,21 @@ def main():
     parser.add_argument("--poll-interval", type=int, default=30, help="Poll interval in seconds")
     args = parser.parse_args()
 
-    # Initialize Vertex AI
-    from pipeline.vertex_ai import init_vertex
-    init_vertex()
+    # Initialize Vertex AI (GCP-specific, requires credentials)
+    import base64, tempfile, atexit
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
+    b64_creds = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS_BASE64")
+    if b64_creds:
+        decoded = base64.b64decode(b64_creds).decode("utf-8")
+        fd, creds_path = tempfile.mkstemp(suffix=".json", prefix="gcp-creds-")
+        os.write(fd, decoded.encode("utf-8"))
+        os.close(fd)
+        os.chmod(creds_path, 0o600)
+        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = creds_path
+        atexit.register(lambda: os.unlink(creds_path) if os.path.exists(creds_path) else None)
+    import vertexai
+    vertexai.init()
 
     # Collect messages
     print(f"Collecting messages from {len(args.input)} files...", file=sys.stderr)

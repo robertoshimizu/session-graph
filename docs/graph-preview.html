@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=1200">
+<title>session-graph — Knowledge Graph Preview</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #ffffff;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    overflow: hidden;
+  }
+  svg {
+    display: block;
+    width: 1200px;
+    height: 800px;
+  }
+  .edge-label {
+    font-size: 8.5px;
+    fill: #6b7280;
+    font-weight: 500;
+    font-style: italic;
+    pointer-events: none;
+  }
+  .node-label {
+    pointer-events: none;
+    text-anchor: middle;
+  }
+  .legend-text {
+    font-size: 10px;
+    fill: #6b7280;
+    font-weight: 400;
+  }
+  .legend-title {
+    font-size: 11px;
+    fill: #374151;
+    font-weight: 600;
+  }
+  .wikidata-badge {
+    font-size: 6.5px;
+    fill: #ffffff;
+    font-weight: 700;
+    text-anchor: middle;
+    pointer-events: none;
+  }
+  .session-label {
+    font-size: 8.5px;
+    fill: #9ca3af;
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+    pointer-events: none;
+    text-anchor: middle;
+  }
+</style>
+</head>
+<body>
+<svg id="graph" viewBox="0 0 1200 800"></svg>
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<script>
+// ── Real data from SPARQL queries across multiple Claude Code sessions ────
+// Shows how entities extracted from different sessions connect through
+// shared concepts, with provenance links back to source session IDs.
+
+const nodes = [
+  // ── Technology entities (from real sessions) ──
+  { id: "fastapi", type: "entity", hub: true, wikidata: "Q101119404" },
+  { id: "next.js", type: "entity", hub: true, wikidata: "Q56062435" },
+  { id: "python", type: "entity", hub: true, wikidata: "Q28865" },
+  { id: "docker", type: "entity", wikidata: "Q15206305" },
+  { id: "playwright", type: "entity", wikidata: "Q123162820" },
+  { id: "pydantic", type: "entity", wikidata: "Q107381687" },
+  { id: "langchain", type: "entity", wikidata: "Q117340550" },
+  { id: "supabase", type: "entity", wikidata: "Q136776342" },
+  { id: "ec2", type: "entity", wikidata: "Q2072356" },
+  { id: "typescript", type: "entity", wikidata: "Q978185" },
+
+  // ── Concepts produced/used ──
+  { id: "conduta agent", type: "product", wikidata: "Q2297769" },
+  { id: "disease search api", type: "product" },
+  { id: "mcp tools", type: "product" },
+  { id: "ui testing", type: "product" },
+  { id: "docx creation", type: "product", wikidata: "Q3033641" },
+  { id: "env variables", type: "product", wikidata: "Q400857" },
+  { id: "static generation", type: "product" },
+
+  // ── Session nodes (provenance) ──
+  { id: "2856bbff", type: "session", label: "session 2856bbff" },
+  { id: "edd9648d", type: "session", label: "session edd9648d" },
+  { id: "ed6b08c4", type: "session", label: "session ed6b08c4" },
+  { id: "64e9d18b", type: "session", label: "session 64e9d18b" },
+  { id: "11119667", type: "session", label: "session 11119667" },
+  { id: "0b438189", type: "session", label: "session 0b438189" },
+];
+
+const links = [
+  // ── FastAPI relationships (from sessions 2856bbff, edd9648d) ──
+  { source: "fastapi", target: "python", label: "builtWith" },
+  { source: "fastapi", target: "conduta agent", label: "hasPart" },
+  { source: "fastapi", target: "ec2", label: "deployedOn" },
+  { source: "fastapi", target: "pydantic", label: "uses" },
+
+  // ── Next.js relationships (from sessions 11119667, edd9648d) ──
+  { source: "next.js", target: "env variables", label: "uses" },
+  { source: "next.js", target: "static generation", label: "produces" },
+  { source: "next.js", target: "disease search api", label: "hasPart" },
+  { source: "next.js", target: "typescript", label: "builtWith" },
+
+  // ── Docker (from session ed6b08c4) ──
+  { source: "docker", target: "fastapi", label: "deploys" },
+
+  // ── Playwright (from session 64e9d18b) ──
+  { source: "playwright", target: "mcp tools", label: "provides" },
+  { source: "playwright", target: "ui testing", label: "enables" },
+
+  // ── Python ecosystem ──
+  { source: "python", target: "langchain", label: "uses" },
+  { source: "python", target: "pydantic", label: "uses" },
+  { source: "python", target: "docx creation", label: "enables" },
+
+  // ── Pydantic details ──
+  { source: "pydantic", target: "conduta agent", label: "servesAs" },
+
+  // ── LangChain ──
+  { source: "langchain", target: "supabase", label: "integratesWith" },
+
+  // ── Disease search connects Next.js to FastAPI ──
+  { source: "disease search api", target: "fastapi", label: "dependsOn" },
+
+  // ── Session provenance links ──
+  { source: "2856bbff", target: "fastapi", label: "extractedFrom" },
+  { source: "2856bbff", target: "python", label: "extractedFrom" },
+  { source: "2856bbff", target: "conduta agent", label: "extractedFrom" },
+  { source: "edd9648d", target: "next.js", label: "extractedFrom" },
+  { source: "edd9648d", target: "fastapi", label: "extractedFrom" },
+  { source: "edd9648d", target: "ec2", label: "extractedFrom" },
+  { source: "ed6b08c4", target: "docker", label: "extractedFrom" },
+  { source: "64e9d18b", target: "playwright", label: "extractedFrom" },
+  { source: "11119667", target: "next.js", label: "extractedFrom" },
+  { source: "11119667", target: "env variables", label: "extractedFrom" },
+  { source: "0b438189", target: "python", label: "extractedFrom" },
+  { source: "0b438189", target: "docx creation", label: "extractedFrom" },
+];
+
+// ── D3 Force Simulation ──────────────────────────────────────────────────
+
+const width = 1200;
+const height = 800;
+
+const svg = d3.select("#graph");
+
+// Light background
+svg.append("rect")
+  .attr("width", width).attr("height", height)
+  .attr("fill", "#fafbfc");
+
+const defs = svg.append("defs");
+
+// Subtle dot grid
+const pattern = defs.append("pattern")
+  .attr("id", "grid")
+  .attr("width", 40).attr("height", 40)
+  .attr("patternUnits", "userSpaceOnUse");
+pattern.append("circle")
+  .attr("cx", 20).attr("cy", 20).attr("r", 0.5)
+  .attr("fill", "#e5e7eb");
+
+svg.append("rect")
+  .attr("width", width).attr("height", height)
+  .attr("fill", "url(#grid)");
+
+// Arrow markers — two variants for different edge types
+["#9ca3af", "#c4b5fd"].forEach((color, i) => {
+  defs.append("marker")
+    .attr("id", i === 0 ? "arrow" : "arrow-session")
+    .attr("viewBox", "0 -4 8 8")
+    .attr("refX", 22)
+    .attr("refY", 0)
+    .attr("markerWidth", 6)
+    .attr("markerHeight", 6)
+    .attr("orient", "auto")
+    .append("path")
+    .attr("d", "M0,-3L7,0L0,3")
+    .attr("fill", color);
+});
+
+// Colors
+const colors = {
+  entityHub: "#2563eb",
+  entity: "#3b82f6",
+  product: "#059669",
+  session: "#8b5cf6",
+  wikidata: "#7c3aed",
+  edge: "#9ca3af",
+  sessionEdge: "#c4b5fd",
+};
+
+function nodeColor(d) {
+  if (d.type === "session") return colors.session;
+  if (d.type === "product") return colors.product;
+  if (d.hub) return colors.entityHub;
+  return colors.entity;
+}
+
+function nodeRadius(d) {
+  if (d.hub) return 12;
+  if (d.type === "session") return 7;
+  if (d.type === "product") return 6;
+  return 8;
+}
+
+function isSessionLink(d) {
+  const src = typeof d.source === 'string' ? d.source : d.source.id;
+  const srcNode = nodes.find(n => n.id === src);
+  return srcNode && srcNode.type === "session";
+}
+
+// Simulation
+const simulation = d3.forceSimulation(nodes)
+  .force("link", d3.forceLink(links).id(d => d.id).distance(d => {
+    const src = nodes.find(n => n.id === (typeof d.source === 'string' ? d.source : d.source.id));
+    if (src && src.type === "session") return 80;
+    if (src && src.hub) return 140;
+    return 100;
+  }).strength(d => {
+    const src = nodes.find(n => n.id === (typeof d.source === 'string' ? d.source : d.source.id));
+    if (src && src.type === "session") return 0.2;
+    return 0.4;
+  }))
+  .force("charge", d3.forceManyBody().strength(d => {
+    if (d.hub) return -600;
+    if (d.type === "session") return -150;
+    return -300;
+  }))
+  .force("center", d3.forceCenter(width / 2, height / 2))
+  .force("collision", d3.forceCollide().radius(d => nodeRadius(d) + 25))
+  .force("x", d3.forceX(width / 2).strength(0.04))
+  .force("y", d3.forceY(height / 2).strength(0.04));
+
+// ── Render ────────────────────────────────────────────────────────────────
+
+const linkGroup = svg.append("g");
+
+const link = linkGroup.selectAll("path")
+  .data(links)
+  .join("path")
+  .attr("fill", "none")
+  .attr("stroke", d => isSessionLink(d) ? colors.sessionEdge : colors.edge)
+  .attr("stroke-width", d => isSessionLink(d) ? 1 : 1.5)
+  .attr("stroke-opacity", d => isSessionLink(d) ? 0.5 : 0.6)
+  .attr("stroke-dasharray", d => isSessionLink(d) ? "4,3" : null)
+  .attr("marker-end", d => isSessionLink(d) ? "url(#arrow-session)" : "url(#arrow)");
+
+// Edge labels (skip session links to avoid clutter)
+const edgeLabels = linkGroup.selectAll("text")
+  .data(links.filter(d => !isSessionLink(d)))
+  .join("text")
+  .attr("class", "edge-label")
+  .text(d => d.label);
+
+// Node group
+const nodeGroup = svg.append("g");
+
+const node = nodeGroup.selectAll("g")
+  .data(nodes)
+  .join("g")
+  .style("cursor", "default");
+
+// Hub glow
+node.filter(d => d.hub)
+  .append("circle")
+  .attr("r", d => nodeRadius(d) + 3)
+  .attr("fill", d => nodeColor(d))
+  .attr("fill-opacity", 0.12);
+
+// Wikidata indicator rings
+node.filter(d => d.wikidata && d.type !== "session")
+  .append("circle")
+  .attr("r", d => nodeRadius(d) + 4)
+  .attr("fill", "none")
+  .attr("stroke", colors.wikidata)
+  .attr("stroke-width", 1)
+  .attr("stroke-opacity", 0.2)
+  .attr("stroke-dasharray", "3,3");
+
+// Session node shape: rounded rect
+node.filter(d => d.type === "session")
+  .append("rect")
+  .attr("x", -10).attr("y", -7)
+  .attr("width", 20).attr("height", 14)
+  .attr("rx", 3)
+  .attr("fill", colors.session)
+  .attr("fill-opacity", 0.15)
+  .attr("stroke", colors.session)
+  .attr("stroke-width", 1.5)
+  .attr("stroke-opacity", 0.5);
+
+// Entity/product circles
+node.filter(d => d.type !== "session")
+  .append("circle")
+  .attr("r", d => nodeRadius(d))
+  .attr("fill", d => nodeColor(d))
+  .attr("fill-opacity", 0.9)
+  .attr("stroke", "#ffffff")
+  .attr("stroke-width", 2);
+
+// Wikidata "W" badge
+node.filter(d => d.wikidata && d.type === "entity")
+  .append("circle")
+  .attr("cx", d => nodeRadius(d) + 1)
+  .attr("cy", d => -nodeRadius(d))
+  .attr("r", 5)
+  .attr("fill", colors.wikidata)
+  .attr("fill-opacity", 0.85)
+  .attr("stroke", "#ffffff")
+  .attr("stroke-width", 1);
+
+node.filter(d => d.wikidata && d.type === "entity")
+  .append("text")
+  .attr("class", "wikidata-badge")
+  .attr("x", d => nodeRadius(d) + 1)
+  .attr("y", d => -nodeRadius(d) + 2.5)
+  .text("W");
+
+// Entity labels
+node.filter(d => d.type !== "session")
+  .append("text")
+  .attr("class", "node-label")
+  .attr("dy", d => nodeRadius(d) + 16)
+  .text(d => d.id)
+  .style("font-size", d => d.hub ? "13px" : (d.type === "product" ? "9.5px" : "10.5px"))
+  .style("fill", d => {
+    if (d.type === "product") return "#047857";
+    if (d.hub) return "#1e40af";
+    return "#374151";
+  })
+  .style("font-weight", d => d.hub ? "600" : "400");
+
+// Session labels (monospace, below the rect)
+node.filter(d => d.type === "session")
+  .append("text")
+  .attr("class", "session-label")
+  .attr("dy", 22)
+  .text(d => d.id);
+
+// ── Legend ─────────────────────────────────────────────────────────────────
+
+const legend = svg.append("g")
+  .attr("transform", "translate(32, 630)");
+
+legend.append("rect")
+  .attr("x", -12).attr("y", -28)
+  .attr("width", 210).attr("height", 168)
+  .attr("rx", 6)
+  .attr("fill", "#ffffff")
+  .attr("stroke", "#e5e7eb")
+  .attr("stroke-width", 1);
+
+legend.append("text")
+  .attr("class", "legend-title")
+  .attr("y", -10)
+  .text("Node types");
+
+const legendItems = [
+  { label: "Technology (hub)", color: colors.entityHub, r: 8, hub: true, shape: "circle" },
+  { label: "Technology", color: colors.entity, r: 6, shape: "circle" },
+  { label: "Concept / Output", color: colors.product, r: 5, shape: "circle" },
+  { label: "Session ID (provenance)", color: colors.session, shape: "rect" },
+];
+
+legendItems.forEach((item, i) => {
+  const g = legend.append("g")
+    .attr("transform", `translate(0, ${i * 22 + 8})`);
+
+  if (item.shape === "rect") {
+    g.append("rect")
+      .attr("x", -1).attr("y", -6)
+      .attr("width", 14).attr("height", 12)
+      .attr("rx", 3)
+      .attr("fill", item.color)
+      .attr("fill-opacity", 0.15)
+      .attr("stroke", item.color)
+      .attr("stroke-width", 1.5)
+      .attr("stroke-opacity", 0.5);
+  } else {
+    g.append("circle")
+      .attr("cx", 6).attr("cy", 0)
+      .attr("r", item.r || 5)
+      .attr("fill", item.color)
+      .attr("fill-opacity", 0.9)
+      .attr("stroke", "#ffffff")
+      .attr("stroke-width", 1.5);
+  }
+
+  g.append("text")
+    .attr("class", "legend-text")
+    .attr("x", 22).attr("y", 3.5)
+    .text(item.label);
+});
+
+// Edge type legend
+const edgeLegendY = legendItems.length * 22 + 18;
+
+legend.append("text")
+  .attr("class", "legend-title")
+  .attr("y", edgeLegendY)
+  .text("Edge types");
+
+[
+  { label: "Knowledge relationship", color: colors.edge, dash: null },
+  { label: "Session provenance", color: colors.sessionEdge, dash: "4,3" },
+].forEach((item, i) => {
+  const g = legend.append("g")
+    .attr("transform", `translate(0, ${edgeLegendY + 12 + i * 18})`);
+
+  g.append("line")
+    .attr("x1", 0).attr("y1", 0)
+    .attr("x2", 14).attr("y2", 0)
+    .attr("stroke", item.color)
+    .attr("stroke-width", 1.5)
+    .attr("stroke-dasharray", item.dash);
+
+  g.append("text")
+    .attr("class", "legend-text")
+    .attr("x", 22).attr("y", 3.5)
+    .text(item.label);
+});
+
+// Wikidata badge legend
+const wdY = edgeLegendY + 12 + 2 * 18 + 6;
+const wdG = legend.append("g")
+  .attr("transform", `translate(0, ${wdY})`);
+wdG.append("circle").attr("cx", 7).attr("cy", 0).attr("r", 5)
+  .attr("fill", colors.wikidata).attr("fill-opacity", 0.85);
+wdG.append("text").attr("class", "wikidata-badge").attr("x", 7).attr("y", 2.5).text("W");
+wdG.append("text").attr("class", "legend-text").attr("x", 22).attr("y", 3.5)
+  .text("Linked to Wikidata");
+
+// ── Watermark ─────────────────────────────────────────────────────────────
+
+svg.append("text")
+  .attr("x", width - 28)
+  .attr("y", height - 16)
+  .attr("text-anchor", "end")
+  .attr("font-size", "10px")
+  .attr("fill", "#d1d5db")
+  .attr("font-family", "-apple-system, system-ui, sans-serif")
+  .text("session-graph / real data from SPARQL query on Fuseki");
+
+// ── Tick ───────────────────────────────────────────────────────────────────
+
+simulation.on("tick", () => {
+  nodes.forEach(d => {
+    d.x = Math.max(80, Math.min(width - 80, d.x));
+    d.y = Math.max(50, Math.min(height - 60, d.y));
+  });
+
+  link.attr("d", d => {
+    const dx = d.target.x - d.source.x;
+    const dy = d.target.y - d.source.y;
+    const dr = Math.sqrt(dx * dx + dy * dy) * 2;
+    return `M${d.source.x},${d.source.y}A${dr},${dr} 0 0,1 ${d.target.x},${d.target.y}`;
+  });
+
+  edgeLabels
+    .attr("x", d => (d.source.x + d.target.x) / 2)
+    .attr("y", d => (d.source.y + d.target.y) / 2 - 4)
+    .attr("text-anchor", "middle");
+
+  node.attr("transform", d => `translate(${d.x},${d.y})`);
+});
+
+// Run simulation to completion
+simulation.alpha(1).restart();
+for (let i = 0; i < 800; i++) simulation.tick();
+simulation.stop();
+simulation.on("tick")();
+
+</script>
+</body>
+</html>
