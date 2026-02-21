@@ -46,11 +46,11 @@ From real-world usage across 52 sessions:
 
 | Metric | Value |
 |--------|-------|
-| Total triples in Fuseki | 138,802 |
-| Sessions indexed | 52 |
-| Knowledge triples extracted | ~2,500+ |
-| Distinct entities | ~4,600+ |
-| Wikidata-linked entities | ~33% |
+| Total triples in Fuseki | 1,334,432 |
+| Sessions indexed | 607+ |
+| Knowledge triples extracted | 47,868+ |
+| Distinct entities | ~8,000+ |
+| Wikidata-linked entities | 4,774 (~33%) |
 | Curated predicates | 24 (with <1% `relatedTo` fallback) |
 | Platforms supported | 4 (Claude Code, DeepSeek, Grok, Warp) |
 | Entity linking precision | 7/7 (agentic ReAct linker) |
@@ -144,15 +144,16 @@ cd session-graph
 cp .env.example .env
 # Edit .env with your LLM provider API key (see Provider Support below)
 
-# 3. Install
+# 3. Install (for manual/bulk processing)
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
-# 4. Start Fuseki (pick one)
-docker run -d --name fuseki -p 3030:3030 stain/jena-fuseki  # Docker
-# OR download from https://jena.apache.org/download/ and run ./fuseki-server
+# 4. Start all services (Fuseki + RabbitMQ + pipeline-runner)
+docker compose up -d
+# Fuseki SPARQL UI: http://localhost:3030
+# RabbitMQ Management UI: http://localhost:15672 (devkg/devkg)
 
-# 5. Process a single session
+# 5. Process a single session (manual)
 python -m pipeline.jsonl_to_rdf path/to/session.jsonl output/session.ttl
 
 # 6. Link entities to Wikidata
@@ -163,6 +164,28 @@ PYTHONUNBUFFERED=1 python -m pipeline.link_entities \
 python -m pipeline.load_fuseki output/*.ttl
 
 # 8. Query at http://localhost:3030
+```
+
+### Automatic Processing (Recommended)
+
+With Docker Compose running, every Claude Code session is automatically processed:
+
+```
+Claude Code session ends
+  → stop_hook.sh publishes to RabbitMQ (~33ms, non-blocking)
+  → pipeline-runner container picks up the job
+  → Extracts triples, generates .ttl, uploads to Fuseki
+  → Failed jobs go to dead-letter queue for inspection
+```
+
+Configure the hook in `~/.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "Stop": [{"hooks": [{"type": "command", "command": "/path/to/hooks/stop_hook.sh", "timeout": 5}]}]
+  }
+}
 ```
 
 ### Bulk Processing
@@ -434,8 +457,15 @@ session-graph/
 |   +-- snapshot_links.py                 # Inspect entity linking progress
 |   +-- load_fuseki.py                    # Upload .ttl to Fuseki
 |   +-- sample_queries.sparql             # 14 SPARQL query templates
-|   +-- .entity_cache.db                  # SQLite cache (auto-created)
+|   +-- .entity_cache.db                  # SQLite cache for Wikidata links (auto-created)
+|   +-- .triple_cache.db                  # SQLite cache for extracted triples (auto-created)
++-- docker/
+|   +-- queue_consumer.py                 # RabbitMQ consumer: dequeues jobs, runs pipeline
++-- hooks/stop_hook.sh                    # Post-session hook: publishes to RabbitMQ (~33ms)
++-- Dockerfile.pipeline                   # Python 3.12 image with pipeline deps
++-- docker-compose.yml                    # fuseki + rabbitmq + pipeline-runner
 +-- .claude/skills/devkg-sparql/          # SPARQL skill for Claude Code
++-- tests/test_integration.sh             # 16-point end-to-end integration test
 +-- output/                               # Generated .ttl files
 +-- requirements.txt
 +-- .env.example

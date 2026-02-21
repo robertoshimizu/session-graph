@@ -58,45 +58,62 @@ class LLMProvider(ABC):
 
 
 # ---------------------------------------------------------------------------
-# Gemini via google-generativeai (uses GEMINI_API_KEY, NOT Vertex AI)
+# Gemini via google-genai (uses GEMINI_API_KEY, NOT Vertex AI)
 # ---------------------------------------------------------------------------
 
 
 class GeminiProvider(LLMProvider):
-    """Google Generative AI provider using the google-generativeai SDK."""
+    """Google Gemini provider using the google-genai SDK.
+
+    Supports two backends (auto-detected):
+      - Vertex AI: when GOOGLE_APPLICATION_CREDENTIALS or ADC is configured
+        (requires ANTHROPIC_VERTEX_PROJECT_ID or GOOGLE_CLOUD_PROJECT + CLOUD_ML_REGION)
+      - Gemini Developer API: when only GEMINI_API_KEY is available
+    """
 
     def __init__(self, model_name: str = "gemini-2.5-flash"):
         super().__init__(model_name)
         try:
-            import google.generativeai as genai
+            from google import genai
         except ImportError:
             raise ImportError(
-                "google-generativeai package required. Install: pip install google-generativeai"
+                "google-genai package required. Install: pip install google-genai"
             )
 
-        api_key = os.environ.get("GEMINI_API_KEY")
-        if not api_key:
-            raise RuntimeError(
-                "GEMINI_API_KEY not set. Get one at https://aistudio.google.com/apikey"
+        project = os.environ.get("ANTHROPIC_VERTEX_PROJECT_ID") or os.environ.get("GOOGLE_CLOUD_PROJECT")
+        region = os.environ.get("CLOUD_ML_REGION", "us-east5")
+        use_vertex = bool(project)
+
+        if use_vertex:
+            self._client = genai.Client(
+                vertexai=True,
+                project=project,
+                location=region,
             )
+            backend = f"vertex-ai ({project}/{region})"
+        else:
+            api_key = os.environ.get("GEMINI_API_KEY")
+            if not api_key:
+                raise RuntimeError(
+                    "No Vertex AI project or GEMINI_API_KEY found. "
+                    "Set ANTHROPIC_VERTEX_PROJECT_ID + CLOUD_ML_REGION for Vertex AI, "
+                    "or GEMINI_API_KEY for the Gemini Developer API."
+                )
+            self._client = genai.Client(api_key=api_key, vertexai=False)
+            backend = "gemini-developer-api"
 
-        genai.configure(api_key=api_key)
-
-        self._model = genai.GenerativeModel(
-            model_name,
-            generation_config=genai.GenerationConfig(
-                response_mime_type="application/json",
-                temperature=0.2,
-                max_output_tokens=8192,
-            ),
-        )
-        print(
-            f"  Gemini provider: {model_name} (google-generativeai)",
-            file=sys.stderr,
-        )
+        print(f"  Gemini provider: {model_name} ({backend})", file=sys.stderr)
 
     def generate_content(self, prompt: str) -> ModelResponse:
-        response = self._model.generate_content(prompt)
+        response = self._client.models.generate_content(
+            model=self.model_name,
+            contents=prompt,
+            config={
+                "response_mime_type": "application/json",
+                "temperature": 0.2,
+                "max_output_tokens": 8192,
+            },
+        )
         return ModelResponse(text=response.text)
 
 

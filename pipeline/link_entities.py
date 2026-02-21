@@ -43,11 +43,10 @@ _agentic_initialized = False
 
 
 def _ensure_agentic_init():
-    """Initialize Vertex AI credentials once for agentic linking."""
+    """Initialize agentic linker (dotenv loaded by agentic_linker_langgraph on import)."""
     global _agentic_initialized
     if not _agentic_initialized:
-        from pipeline.agentic_linker_langgraph import _init_vertex_credentials
-        _init_vertex_credentials()
+        import pipeline.agentic_linker_langgraph  # noqa: F401 — triggers dotenv load
         _agentic_initialized = True
 
 

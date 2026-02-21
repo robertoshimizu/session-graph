@@ -18,11 +18,11 @@ FUSEKI_URL = "http://localhost:3030"
 DATASET = "devkg"
 
 
-def ensure_dataset(fuseki_url: str, dataset: str) -> bool:
+def ensure_dataset(fuseki_url: str, dataset: str, auth: tuple[str, str] | None = None) -> bool:
     """Create the dataset if it doesn't exist."""
     # Check if dataset exists
     try:
-        resp = requests.get(f"{fuseki_url}/$/datasets/{dataset}", timeout=5)
+        resp = requests.get(f"{fuseki_url}/$/datasets/{dataset}", timeout=5, auth=auth)
         if resp.status_code == 200:
             print(f"Dataset '{dataset}' already exists.")
             return True
@@ -37,6 +37,7 @@ def ensure_dataset(fuseki_url: str, dataset: str) -> bool:
         f"{fuseki_url}/$/datasets",
         data={"dbName": dataset, "dbType": "tdb2"},
         timeout=10,
+        auth=auth,
     )
     if resp.status_code in (200, 201):
         print(f"Dataset '{dataset}' created successfully.")
@@ -46,7 +47,7 @@ def ensure_dataset(fuseki_url: str, dataset: str) -> bool:
         return False
 
 
-def upload_turtle(fuseki_url: str, dataset: str, ttl_path: str) -> bool:
+def upload_turtle(fuseki_url: str, dataset: str, ttl_path: str, auth: tuple[str, str] | None = None) -> bool:
     """Upload a Turtle file to the dataset."""
     path = Path(ttl_path)
     if not path.exists():
@@ -61,6 +62,7 @@ def upload_turtle(fuseki_url: str, dataset: str, ttl_path: str) -> bool:
             data=f,
             headers={"Content-Type": "text/turtle"},
             timeout=60,
+            auth=auth,
         )
 
     if resp.status_code in (200, 201, 204):

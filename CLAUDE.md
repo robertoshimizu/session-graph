@@ -78,6 +78,9 @@ Closed-world design: the LLM is instructed to use ONLY these predicates. A norma
   +-- Reads source format
   +-- Creates PROV-O + SIOC structure (sessions, messages, authors)
   +-- Calls triple_extraction.py for each assistant message
+  |   +-- SQLite cache check (.triple_cache.db) by message UUID
+  |   |   +-- Cache hit -> use cached triples (0 API calls)
+  |   |   +-- Cache miss -> call LLM, cache result
   |   +-- Sends text to LLM -> top 10 (subject, predicate, object) triples
   |       +-- Capped at 10 triples per message (top 10 by importance)
   |       +-- Closed-world predicate vocab (24 predicates)
@@ -169,38 +172,41 @@ pipeline/
 +-- load_fuseki.py                   # Upload .ttl to Apache Jena Fuseki
 +-- sample_queries.sparql            # 14 SPARQL query templates
 +-- .entity_cache.db                 # SQLite cache for Wikidata links (auto-created)
++-- .triple_cache.db                 # SQLite cache for extracted triples by message UUID (auto-created)
 .claude/skills/devkg-sparql/SKILL.md # SPARQL skill (14 local + 6 Wikidata templates)
 cognee_eval/                         # Cognee evaluation (rejected -- no RDF output)
 research/                            # Wikidata entity linking research docs
-hooks/post_session_hook.sh           # Automation skeleton
-daemon/sync_daemon.py                # Watchdog file watcher skeleton
-output/                              # Generated .ttl files and batch job manifests
-requirements.txt                     # Python dependencies
+docker/
++-- __init__.py                      # Package marker
++-- queue_consumer.py                # RabbitMQ consumer (pika): dequeues jobs, runs pipeline, uploads to Fuseki
+Dockerfile.pipeline                   # Python 3.12 image with pipeline deps + pika
+docker-compose.yml                    # fuseki + rabbitmq + pipeline-runner
+hooks/stop_hook.sh                    # Post-session hook: curl POST to RabbitMQ HTTP API (~33ms)
+tests/test_integration.sh             # 16-point end-to-end integration test
+output/                               # Generated .ttl files and batch job manifests
+requirements.txt                      # Python dependencies
 ```
 
 ## How to Run
 
 ```bash
-# Start Fuseki
-docker compose up -d fuseki
-# Or standalone: cd ~/opt/apache-jena-fuseki && ./fuseki-server &
+# Start all services (Fuseki + RabbitMQ + pipeline-runner)
+docker compose up -d
 
-# Activate virtualenv
+# RabbitMQ Management UI: http://localhost:15672 (devkg/devkg)
+# Fuseki SPARQL UI: http://localhost:3030
+
+# The stop hook (hooks/stop_hook.sh) auto-publishes to RabbitMQ after each Claude Code session.
+# The pipeline-runner container processes the queue automatically.
+
+# Manual: single session (Claude Code)
 source .venv/bin/activate
-
-# Single session (Claude Code)
 python -m pipeline.jsonl_to_rdf <session.jsonl> output/result.ttl
 
 # Other platforms
 python -m pipeline.deepseek_to_rdf <zip_path> output/deepseek.ttl --conversation 0
 python -m pipeline.grok_to_rdf <zip_path> output/grok.ttl --conversation 0
 python -m pipeline.warp_to_rdf output/warp.ttl --conversation 0 --min-exchanges 5
-
-# Custom model (default: gemini-2.5-flash)
-python -m pipeline.jsonl_to_rdf <session.jsonl> output/result.ttl --model gemini-2.5-flash-lite
-
-# Structure only (no LLM API calls)
-python -m pipeline.jsonl_to_rdf <session.jsonl> output/result.ttl --skip-extraction
 
 # Bulk process all Claude Code sessions
 python -m pipeline.bulk_process
@@ -210,12 +216,22 @@ python -m pipeline.bulk_batch submit
 python -m pipeline.bulk_batch status --wait --poll-interval 60
 python -m pipeline.bulk_batch collect
 
-# Entity linking (use PYTHONUNBUFFERED=1 to see progress)
+# Entity linking
 PYTHONUNBUFFERED=1 python -m pipeline.link_entities \
   --input output/*.ttl --output output/wikidata_links.ttl
 
-# Load into Fuseki
-python pipeline/load_fuseki.py output/*.ttl
+# Load .ttl files into Docker Fuseki (requires auth)
+python -c "
+from pipeline.load_fuseki import ensure_dataset, upload_turtle
+import glob
+auth = ('admin', 'admin')
+ensure_dataset('http://localhost:3030', 'devkg', auth=auth)
+for f in glob.glob('output/claude/*.ttl'):
+    upload_turtle('http://localhost:3030', 'devkg', f, auth=auth)
+"
+
+# Integration test
+bash tests/test_integration.sh
 
 # Query at http://localhost:3030
 ```
@@ -237,6 +253,7 @@ python pipeline/load_fuseki.py output/*.ttl
 - **Entity boundaries**: Prompt enforces 1-3 word entities; `is_valid_entity()` rejects 4+ words, paths, dimension strings, single chars.
 - **Context-aware entity linking**: `link_entities.py` extracts neighboring KnowledgeTriple relationships from .ttl files and passes them as context to the ReAct agent. Improves disambiguation for ambiguous labels (e.g., "condition" -> disease vs programming conditional).
 - **`FILTER(LANG(?label) = "")`**: Used in all SPARQL queries to avoid duplicate rows from lang-tagged vs untagged literals.
+- **Triple extraction cache**: SQLite cache (`.triple_cache.db`) keyed by message UUID. The stop hook fires on every Claude Code pause (not just session end), causing the same JSONL to be re-processed repeatedly. The cache ensures each message's LLM extraction only happens once — re-runs rebuild the full RDF graph (cheap) but skip API calls for cached messages. Stores `text_hash` for auditability. Shared between local CLI and Docker container via volume mount.
 
 ## Known Issues
 
