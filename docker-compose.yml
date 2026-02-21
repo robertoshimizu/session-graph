@@ -10,5 +10,44 @@ services:
     volumes:
       - fuseki-data:/fuseki
 
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: devkg-rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      - RABBITMQ_DEFAULT_USER=devkg
+      - RABBITMQ_DEFAULT_PASS=devkg
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  pipeline-runner:
+    build:
+      context: .
+      dockerfile: Dockerfile.pipeline
+    container_name: devkg-pipeline-runner
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      fuseki:
+        condition: service_started
+    environment:
+      - RABBITMQ_URL=amqp://devkg:devkg@rabbitmq:5672/
+      - FUSEKI_URL=http://fuseki:3030
+      - FUSEKI_DATASET=devkg
+    env_file:
+      - .env
+    volumes:
+      - ~/.claude/projects:/claude-sessions:ro
+      - ./output:/app/output
+    restart: unless-stopped
+
 volumes:
   fuseki-data:
+  rabbitmq-data:
