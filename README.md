@@ -234,12 +234,22 @@ python -m pipeline.load_fuseki output/claude/*.ttl --auth admin:admin
 
 After the backfill, automatic processing takes over — every future session is indexed as you work, with no manual steps.
 
-### Other Platforms
+### Other Platforms (Cross-Platform Insights)
+
+Most AI tools let you export your conversation history — DeepSeek and Grok offer JSON/zip downloads, Warp stores sessions in a local SQLite database. session-graph ingests all of them into the same knowledge graph, using the same ontology and entity vocabulary.
+
+This is where it gets interesting: entities are linked **across platforms**. If you discussed "Kubernetes" in Claude Code, "k8s" in DeepSeek, and "container orchestration" in Grok, they all resolve to the same Wikidata entity and connect in the graph. You can query relationships that span tools you used months apart, on different projects, without remembering where you had each conversation.
 
 ```bash
-python -m pipeline.deepseek_to_rdf data/deepseek_export.zip output/deepseek.ttl
-python -m pipeline.grok_to_rdf data/grok_export.zip output/grok.ttl
-python -m pipeline.warp_to_rdf output/warp.ttl --min-exchanges 5
+# Export your chat history from each platform, then:
+python -m pipeline.deepseek_to_rdf data/deepseek_export.zip output/deepseek/deepseek.ttl
+python -m pipeline.grok_to_rdf data/grok_export.zip output/grok/grok.ttl
+python -m pipeline.warp_to_rdf output/warp/warp.ttl --min-exchanges 5
+
+# Link entities and load — same as Claude sessions
+PYTHONUNBUFFERED=1 python -m pipeline.link_entities \
+  --input output/**/*.ttl --output output/wikidata_links.ttl
+python -m pipeline.load_fuseki output/**/*.ttl --auth admin:admin
 ```
 
 ## Why RDF/SPARQL?
