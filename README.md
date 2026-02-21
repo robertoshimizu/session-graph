@@ -46,11 +46,11 @@ From real-world usage across 52 sessions:
 
 | Metric | Value |
 |--------|-------|
-| Total triples in Fuseki | 1,322,167 |
-| Sessions indexed | 652 |
-| Knowledge triples extracted | ~30,000+ |
-| Distinct entities | ~15,000+ |
-| Wikidata-linked entities | ~33% |
+| Total triples in Fuseki | 1,334,432 |
+| Sessions indexed | 607+ |
+| Knowledge triples extracted | 47,868+ |
+| Distinct entities | ~8,000+ |
+| Wikidata-linked entities | 4,774 (~33%) |
 | Curated predicates | 24 (with <1% `relatedTo` fallback) |
 | Platforms supported | 4 (Claude Code, DeepSeek, Grok, Warp) |
 | Entity linking precision | 7/7 (agentic ReAct linker) |
@@ -457,8 +457,15 @@ session-graph/
 |   +-- snapshot_links.py                 # Inspect entity linking progress
 |   +-- load_fuseki.py                    # Upload .ttl to Fuseki
 |   +-- sample_queries.sparql             # 14 SPARQL query templates
-|   +-- .entity_cache.db                  # SQLite cache (auto-created)
+|   +-- .entity_cache.db                  # SQLite cache for Wikidata links (auto-created)
+|   +-- .triple_cache.db                  # SQLite cache for extracted triples (auto-created)
++-- docker/
+|   +-- queue_consumer.py                 # RabbitMQ consumer: dequeues jobs, runs pipeline
++-- hooks/stop_hook.sh                    # Post-session hook: publishes to RabbitMQ (~33ms)
++-- Dockerfile.pipeline                   # Python 3.12 image with pipeline deps
++-- docker-compose.yml                    # fuseki + rabbitmq + pipeline-runner
 +-- .claude/skills/devkg-sparql/          # SPARQL skill for Claude Code
++-- tests/test_integration.sh             # 16-point end-to-end integration test
 +-- output/                               # Generated .ttl files
 +-- requirements.txt
 +-- .env.example

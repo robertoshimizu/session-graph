@@ -2,6 +2,19 @@
 
 All notable changes to session-graph are documented here.
 
+## [0.5.0] - 2026-02-21
+
+### Added
+- **Triple extraction cache** (`.triple_cache.db`) — SQLite cache keyed by message UUID prevents redundant Gemini API calls when stop hook re-processes the same session. Re-runs rebuild full RDF graph but skip all cached messages (0 API calls).
+- **Full pipeline automation verified** — stop hook → RabbitMQ → pipeline-runner → Fuseki is now the production path. Docker Fuseki promoted to primary on port 3030, local Java Fuseki retired.
+- Cleaned up 101 empty session files from `~/.claude/projects/`.
+- Fixed stale `_init_vertex_credentials` import in `link_entities.py`.
+
+### Changed
+- `docker/queue_consumer.py` — removed mtime-based watermark check (cache makes it unnecessary).
+- `docker-compose.yml` — added volume mount for `.triple_cache.db` persistence between container and host.
+- Docker Fuseki is now the primary triplestore (was local Java standalone).
+
 ## [0.4.0] - 2026-02-21
 
 ### Added
