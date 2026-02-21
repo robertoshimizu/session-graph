@@ -73,7 +73,7 @@ def upload_turtle(fuseki_url: str, dataset: str, ttl_path: str, auth: tuple[str,
         return False
 
 
-def count_triples(fuseki_url: str, dataset: str) -> int | None:
+def count_triples(fuseki_url: str, dataset: str, auth: tuple[str, str] | None = None) -> int | None:
     """Query the total number of triples in the dataset."""
     query = "SELECT (COUNT(*) AS ?count) WHERE { ?s ?p ?o }"
     try:
@@ -82,6 +82,7 @@ def count_triples(fuseki_url: str, dataset: str) -> int | None:
             params={"query": query},
             headers={"Accept": "application/sparql-results+json"},
             timeout=10,
+            auth=auth,
         )
         if resp.status_code == 200:
             results = resp.json()
@@ -98,17 +99,20 @@ def main():
     parser.add_argument("files", nargs="+", help="Turtle files to upload")
     parser.add_argument("--fuseki-url", default=FUSEKI_URL, help="Fuseki URL")
     parser.add_argument("--dataset", default=DATASET, help="Dataset name")
+    parser.add_argument("--auth", help="user:password for Fuseki auth (e.g. admin:admin)")
     args = parser.parse_args()
 
-    if not ensure_dataset(args.fuseki_url, args.dataset):
+    auth = tuple(args.auth.split(":", 1)) if args.auth else None
+
+    if not ensure_dataset(args.fuseki_url, args.dataset, auth=auth):
         sys.exit(1)
 
     success = 0
     for ttl_file in args.files:
-        if upload_turtle(args.fuseki_url, args.dataset, ttl_file):
+        if upload_turtle(args.fuseki_url, args.dataset, ttl_file, auth=auth):
             success += 1
 
-    total = count_triples(args.fuseki_url, args.dataset)
+    total = count_triples(args.fuseki_url, args.dataset, auth=auth)
     print(f"\nUploaded {success}/{len(args.files)} files.")
     if total is not None:
         print(f"Total triples in dataset: {total}")

@@ -140,17 +140,29 @@ All parsers produce the same RDF schema. Entities merge by label across platform
 ## Quick Start
 
 ```bash
-# 1. Clone
 git clone https://github.com/robertoshimizu/session-graph.git
 cd session-graph
+./setup.sh
+```
 
-# 2. Configure
+The setup script checks prerequisites, creates `.env` with your LLM provider, installs Python dependencies, starts Docker services (Fuseki + RabbitMQ), and runs a smoke test — all interactively.
+
+After setup: **http://localhost:3030** (Fuseki SPARQL UI) and **http://localhost:15672** (RabbitMQ, devkg/devkg).
+
+<details>
+<summary>Manual setup (without setup.sh)</summary>
+
+```bash
+# 1. Configure
 cp .env.example .env
 # Edit .env with your LLM provider API key (see Provider Support below)
 
-# 3. Install (for manual/bulk processing)
+# 2. Install
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
+
+# 3. Create output directories
+mkdir -p output/claude output/deepseek output/grok output/warp logs
 
 # 4. Start all services (Fuseki + RabbitMQ + pipeline-runner)
 docker compose up -d
@@ -158,17 +170,18 @@ docker compose up -d
 # RabbitMQ Management UI: http://localhost:15672 (devkg/devkg)
 
 # 5. Process a single session (manual)
-python -m pipeline.jsonl_to_rdf path/to/session.jsonl output/session.ttl
+python -m pipeline.jsonl_to_rdf path/to/session.jsonl output/claude/session.ttl
 
 # 6. Link entities to Wikidata
 PYTHONUNBUFFERED=1 python -m pipeline.link_entities \
   --input output/*.ttl --output output/wikidata_links.ttl
 
-# 7. Load into Fuseki
-python -m pipeline.load_fuseki output/*.ttl
+# 7. Load into Fuseki (--auth required for Docker Fuseki)
+python -m pipeline.load_fuseki output/*.ttl --auth admin:admin
 
 # 8. Query at http://localhost:3030
 ```
+</details>
 
 ### Automatic Processing (Recommended)
 
@@ -209,8 +222,8 @@ python -m pipeline.bulk_process --limit 50 --sort newest --skip-linking
 PYTHONUNBUFFERED=1 python -m pipeline.link_entities \
   --input output/claude/*.ttl --output output/claude/wikidata_links.ttl --workers 8
 
-# Load into Fuseki
-python -m pipeline.load_fuseki output/claude/*.ttl
+# Load into Fuseki (--auth required for Docker Fuseki)
+python -m pipeline.load_fuseki output/claude/*.ttl --auth admin:admin
 ```
 
 ### Other Platforms
@@ -514,6 +527,17 @@ The entire pipeline runs for less than $2 on a typical developer's full session 
 - **Agentic linker over heuristic**: LangGraph ReAct agent (LLM + Wikidata API tool) achieves 7/7 precision vs ~50% for keyword heuristic. Resolves abbreviations like k8s, otel, tf.
 - **Triple extraction cache**: SQLite cache (`.triple_cache.db`) keyed by message UUID. The stop hook fires on every Claude Code pause, causing re-processing. The cache ensures each message's LLM extraction only happens once — re-runs rebuild the RDF graph but skip API calls for cached messages.
 - **Incremental real-time ingestion**: Stop hook → RabbitMQ → pipeline-runner → Fuseki. Each session pause triggers automatic extraction and loading. The triple cache makes repeated processing free.
+
+## Troubleshooting
+
+| Problem | Fix |
+|---------|-----|
+| **Fuseki returns 401 Unauthorized** | Docker Fuseki requires auth. Use `--auth admin:admin` with `load_fuseki.py`, or pass `auth=('admin', 'admin')` to the Python functions. |
+| **RabbitMQ management UI unreachable** | Wait 30s after `docker compose up`. Check with `docker compose logs rabbitmq`. Default credentials: devkg/devkg. |
+| **No sessions to process** | `bulk_process.py` looks for `.jsonl` files under `~/.claude/projects/`. Run at least one Claude Code session first. |
+| **`link_entities.py` output buffered** | Use `PYTHONUNBUFFERED=1` prefix: `PYTHONUNBUFFERED=1 python -m pipeline.link_entities ...` |
+| **Stop hook not firing** | Verify `~/.claude/settings.json` has the hook entry. The path must be absolute. Run `./setup.sh` to install it automatically. |
+| **`ModuleNotFoundError`** | Activate the virtualenv first: `source .venv/bin/activate` |
 
 ## Lessons Learned
 
