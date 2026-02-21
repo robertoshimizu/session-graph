@@ -83,6 +83,10 @@ Cursor (planned)      --+      curated predicates)              |
                               Wikidata QIDs)                    v
                                                         Claude Code Skill
                                                      (natural language -> SPARQL)
+
+Real-time Loop (Claude Code):
+  Session pause → stop_hook.sh → RabbitMQ → pipeline-runner → Fuseki
+                                              (triple cache: 0 API calls for seen messages)
 ```
 
 ### Pipeline in Detail
@@ -137,7 +141,7 @@ All parsers produce the same RDF schema. Entities merge by label across platform
 
 ```bash
 # 1. Clone
-git clone https://github.com/your-username/session-graph.git
+git clone https://github.com/robertoshimizu/session-graph.git
 cd session-graph
 
 # 2. Configure
@@ -508,6 +512,8 @@ The entire pipeline runs for less than $2 on a typical developer's full session 
 - **Dual storage**: Direct edges for fast graph traversal AND reified `KnowledgeTriple` nodes for provenance. Query either depending on your needs.
 - **Context-aware entity linking**: Neighboring KnowledgeTriple relationships are passed as disambiguation context to the ReAct agent. "condition" resolves to disease (not programming conditional) when surrounded by medical triples.
 - **Agentic linker over heuristic**: LangGraph ReAct agent (LLM + Wikidata API tool) achieves 7/7 precision vs ~50% for keyword heuristic. Resolves abbreviations like k8s, otel, tf.
+- **Triple extraction cache**: SQLite cache (`.triple_cache.db`) keyed by message UUID. The stop hook fires on every Claude Code pause, causing re-processing. The cache ensures each message's LLM extraction only happens once — re-runs rebuild the RDF graph but skip API calls for cached messages.
+- **Incremental real-time ingestion**: Stop hook → RabbitMQ → pipeline-runner → Fuseki. Each session pause triggers automatic extraction and loading. The triple cache makes repeated processing free.
 
 ## Lessons Learned
 
