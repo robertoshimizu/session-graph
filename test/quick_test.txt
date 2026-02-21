@@ -1,3 +1,0 @@
-Neo4j
-Python
-React
