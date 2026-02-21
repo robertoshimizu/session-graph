@@ -5,10 +5,10 @@ This module builds an ontologist prompt and parses the LLM response into
 normalized (subject, predicate, object) triples aligned with the devkg ontology.
 
 Usage:
-    from pipeline.llm_providers import get_provider
+    from pipeline.vertex_ai import get_gemini_model
     from pipeline.triple_extraction import extract_triples_gemini
 
-    model = get_provider("gemini", "gemini-2.5-flash")
+    model = get_gemini_model()
     triples = extract_triples_gemini(model, "Neo4j stores data as a property graph")
     # [{"subject": "neo4j", "predicate": "isTypeOf", "object": "property graph"}]
 """
@@ -232,6 +232,7 @@ RULES:
 5. Return [] for messages with no extractable technical knowledge.
 6. Each triple must have "subject", "predicate", and "object" string fields.
 7. Entity names MUST be 1-3 words maximum. Use the most common/recognized name for the technology, tool, or concept. NEVER use full phrases or descriptions as entity names.
+8. Extract AT MOST 10 triples per message. If you identify more than 10 relationships, return only the top 10 most important ones. Prioritize relationships that capture architectural decisions, technology choices, and integration patterns over trivial implementation details.
    - GOOD entities: "neo4j", "python", "claude agent sdk", "urinary tract infection"
    - BAD entities: "notification when claude finishes responding", "follow-up if no improvement in 48h", "migration from npm to native"
    - If you can't name it in 1-3 words, it's not an entity — it's a description. Skip it.
@@ -458,6 +459,12 @@ def _parse_triples_response(raw: str) -> list[dict] | None:
                 and is_valid_entity(normalized["object"])):
             triples.append(normalized)
 
+    # Enforce max 10 triples per message — keep the first 10 (LLM is instructed
+    # to prioritize the most important relationships, so order matters)
+    MAX_TRIPLES_PER_MESSAGE = 10
+    if len(triples) > MAX_TRIPLES_PER_MESSAGE:
+        triples = triples[:MAX_TRIPLES_PER_MESSAGE]
+
     return triples
 
 
@@ -477,9 +484,7 @@ def extract_triples_gemini(model, text: str) -> list[dict]:
     3. Unparseable response — retry with shorter input
 
     Args:
-        model: An LLMProvider instance (from llm_providers.get_provider) or any
-               object with a generate_content(prompt) method returning an object
-               with a .text property.
+        model: A vertexai GenerativeModel instance (from vertex_ai.get_gemini_model).
         text: The text to extract triples from.
 
     Returns:

@@ -43,13 +43,11 @@ _agentic_initialized = False
 
 
 def _ensure_agentic_init():
-    """Ensure environment is loaded for agentic linking. No-op since
-    credentials are now handled by provider auto-detection in
-    agentic_linker_langgraph._get_shared_model()."""
+    """Initialize Vertex AI credentials once for agentic linking."""
     global _agentic_initialized
     if not _agentic_initialized:
-        from dotenv import load_dotenv
-        load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
+        from pipeline.agentic_linker_langgraph import _init_vertex_credentials
+        _init_vertex_credentials()
         _agentic_initialized = True
 
 
@@ -404,13 +402,19 @@ def select_best_match(entity_name: str, results: List[Dict]) -> Optional[Dict]:
 # Entity extraction from .ttl files
 # ---------------------------------------------------------------------------
 
-def extract_entities_from_ttl(ttl_paths: List[str]) -> List[str]:
+def extract_entities_from_ttl(ttl_paths: List[str]) -> tuple:
     """Extract unique entity labels from .ttl files.
 
     Finds all resources with rdf:type devkg:Entity and rdfs:label,
-    deduplicates, and returns sorted labels.
+    deduplicates, and returns (sorted_labels, session_counts) where
+    session_counts maps each label to the number of distinct .ttl files
+    it appears in.
     """
-    labels = set()
+    from collections import defaultdict
+
+    # label -> set of file paths where it appears
+    label_sessions: Dict[str, set] = defaultdict(set)
+
     for path in ttl_paths:
         g = Graph()
         try:
@@ -421,9 +425,12 @@ def extract_entities_from_ttl(ttl_paths: List[str]) -> List[str]:
 
         for entity_node in g.subjects(RDF.type, DEVKG.Entity):
             for label_lit in g.objects(entity_node, RDFS.label):
-                labels.add(str(label_lit).strip())
+                label = str(label_lit).strip()
+                label_sessions[label].add(path)
 
-    return sorted(labels)
+    labels = sorted(label_sessions.keys())
+    session_counts = {label: len(paths) for label, paths in label_sessions.items()}
+    return labels, session_counts
 
 
 def extract_entity_contexts(ttl_paths: List[str]) -> Dict[str, str]:
@@ -813,6 +820,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--workers", type=int, default=DEFAULT_WORKERS,
         help=f"Number of parallel workers for cache misses (default: {DEFAULT_WORKERS})",
     )
+    parser.add_argument(
+        "--min-sessions", type=int, default=2,
+        help="Only link entities appearing in at least N sessions/files (default: 2)",
+    )
     return parser
 
 
@@ -837,10 +848,34 @@ def main():
         if verbose:
             print(f"Batch mode: reading {len(args.ttl_inputs)} .ttl file(s)...")
 
-        labels = extract_entities_from_ttl(args.ttl_inputs)
+        labels, session_counts = extract_entities_from_ttl(args.ttl_inputs)
         if not labels:
             print("No entities with rdf:type devkg:Entity found.", file=sys.stderr)
             sys.exit(1)
+
+        # --- Min-sessions filtering ---
+        min_sessions = args.min_sessions
+        if min_sessions > 1:
+            # Build session counts for normalized labels (aliases may merge counts)
+            normalized_session_counts: Dict[str, int] = {}
+            for lbl in labels:
+                norm = normalize_label(lbl, aliases)
+                current = normalized_session_counts.get(norm, 0)
+                normalized_session_counts[norm] = max(current, session_counts.get(lbl, 0))
+
+            total_unique = len(set(normalize_label(lbl, aliases) for lbl in labels))
+            passing = [lbl for lbl in labels
+                       if normalized_session_counts.get(normalize_label(lbl, aliases), 0) >= min_sessions]
+            passing_unique = len(set(normalize_label(lbl, aliases) for lbl in passing))
+            filtered_out = total_unique - passing_unique
+
+            if verbose:
+                print(f"\nMin-sessions filter (threshold: {min_sessions}):")
+                print(f"  Total unique entities:  {total_unique}")
+                print(f"  Passing (>= {min_sessions} sessions): {passing_unique}")
+                print(f"  Filtered out:           {filtered_out} ({filtered_out/total_unique*100:.1f}%)" if total_unique else "")
+
+            labels = passing
 
         # Extract triple-based context for disambiguation
         if agentic and verbose:
