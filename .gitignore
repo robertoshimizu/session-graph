@@ -27,4 +27,4 @@ external_knowledge/
 cognee_eval/
 research/
 daemon/
-hooks/
+hooks/*.log
