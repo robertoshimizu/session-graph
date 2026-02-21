@@ -20,6 +20,7 @@ Dependencies:
 import argparse
 import json
 import os
+import re
 import sqlite3
 import sys
 import time
@@ -42,13 +43,11 @@ _agentic_initialized = False
 
 
 def _ensure_agentic_init():
-    """Ensure environment is loaded for agentic linking. No-op since
-    credentials are now handled by provider auto-detection in
-    agentic_linker_langgraph._get_shared_model()."""
+    """Initialize Vertex AI credentials once for agentic linking."""
     global _agentic_initialized
     if not _agentic_initialized:
-        from dotenv import load_dotenv
-        load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
+        from pipeline.agentic_linker_langgraph import _init_vertex_credentials
+        _init_vertex_credentials()
         _agentic_initialized = True
 
 
@@ -71,6 +70,189 @@ TECH_KEYWORDS = [
 HEADERS = {
     'User-Agent': 'DevKG-EntityLinker/1.0 (https://github.com/devkg/research) Python/requests'
 }
+
+# ---------------------------------------------------------------------------
+# Pre-filter: reject garbage entities before Wikidata linking
+# ---------------------------------------------------------------------------
+
+# Known-good short terms that bypass ALL filters
+_WHITELIST = frozenset({
+    'ai', 'ui', 'db', 'os', 'ip', 'ci', 'cd', 'js', 'ts', 'go', 'ml',
+    'api', 'sdk', 'sql', 'css', 'jwt', 'ssh', 'ssl', 'tls', 'dns', 'cdn',
+    'gpu', 'cpu', 'ram', 'ssd', 'hdd', 'cli', 'gui', 'ide', 'nlp', 'llm',
+    'rag', 'rdf', 'owl', 'uri', 'url', 'xml', 'csv', 'pdf', 'svg', 'png',
+    'gif', 'npm', 'pip', 'git', 'aws', 'gcp', 'mcp', 'rpa',
+})
+
+# File extensions to reject
+_FILE_EXT_RE = re.compile(
+    r'^[\w./-]+\.'
+    r'(?:ts|tsx|js|jsx|py|json|yaml|yml|css|html|md|sql|sh|env|db|sqlite|txt|'
+    r'png|csv|jsonl|xml|toml|lock|cfg|ini|log|ttl|rdf|sparql|ipynb|whl|gz|'
+    r'tar|zip|pyc|appimage|dmg|exe|npz|rq)$',
+    re.IGNORECASE,
+)
+
+# Medical/ICD codes: single letter + 2+ digits, or letter(s)_digits_digits
+_MEDICAL_CODE_RE = re.compile(r'^[a-z]\d{2,}', re.IGNORECASE)
+_MEDICAL_CODE2_RE = re.compile(r'^[a-z]+_\d{3}_\d{3}$', re.IGNORECASE)
+
+# snake_case with 3+ segments
+_SNAKE_3_RE = re.compile(r'^[a-z][a-z0-9]*(_[a-z0-9]+){2,}$')
+
+# Internal protocol codes: word_digits
+_PROTO_CODE_RE = re.compile(r'^[a-z]+_\d+$', re.IGNORECASE)
+
+# Starts with special chars
+_SPECIAL_START_RE = re.compile(r'^[#@$*!~.:]+')
+_CLI_FLAG_RE = re.compile(r'^--')
+
+# Numeric-prefixed phrases
+_NUMERIC_PREFIX_RE = re.compile(r'^\d+\s')
+
+# Version/decimal strings starting with digit
+_VERSION_RE = re.compile(r'^\d+\.\d')
+
+# Code syntax: brackets
+_BRACKET_RE = re.compile(r'[\[\]]')
+
+# Function calls: parentheses
+_PAREN_RE = re.compile(r'[()]')
+
+# npm scoped packages
+_NPM_SCOPE_RE = re.compile(r'^@.+/')
+
+# CSS dimensions
+_CSS_DIM_RE = re.compile(r'\d+(?:px|vh|vw|em|rem|pt|%)\b', re.IGNORECASE)
+
+# Percentage values
+_PERCENT_RE = re.compile(r'\d+%')
+
+# Paths with 2+ segments
+_PATH_RE = re.compile(r'(?:^|[^a-zA-Z])[a-zA-Z0-9_./-]+/[a-zA-Z0-9_./-]+/[a-zA-Z0-9_./-]+')
+_PATH_SIMPLE_RE = re.compile(r'^[a-zA-Z0-9_./-]+/[a-zA-Z0-9_./-]+$')
+
+# Two-char whitelist (others are too ambiguous)
+_TWO_CHAR_WHITELIST = frozenset({
+    'ai', 'ui', 'db', 'os', 'ip', 'ci', 'cd', 'js', 'ts', 'go', 'ml',
+})
+
+
+def is_linkable_entity(label: str) -> bool:
+    """Second-level pre-filter: reject garbage entities before Wikidata linking.
+
+    Returns True if the entity should be sent to the linker, False if it should
+    be skipped. Designed to catch entities that slipped past the first-level
+    extraction filter (triple_extraction.py).
+    """
+    s = label.strip()
+    low = s.lower()
+
+    # Empty
+    if not s:
+        return False
+
+    # Whitelist bypass
+    if low in _WHITELIST:
+        return True
+
+    # 1. Filenames with extensions
+    if _FILE_EXT_RE.match(low):
+        return False
+
+    # 5. Starts with special chars (before other checks since many patterns start with these)
+    if _SPECIAL_START_RE.match(s) or _CLI_FLAG_RE.match(s):
+        return False
+
+    # 6. Numeric-prefixed phrases
+    if _NUMERIC_PREFIX_RE.match(s):
+        return False
+
+    # 7. Version/decimal strings
+    if _VERSION_RE.match(s):
+        return False
+
+    # 8. Two-char noise
+    if len(low) == 2 and low.isalpha() and low not in _TWO_CHAR_WHITELIST:
+        return False
+
+    # Single char
+    if len(s) == 1:
+        return False
+
+    # 9. Code syntax: brackets
+    if _BRACKET_RE.search(s):
+        return False
+
+    # 10. Function calls: parentheses
+    if _PAREN_RE.search(s):
+        return False
+
+    # 11. npm scoped packages
+    if _NPM_SCOPE_RE.match(s):
+        return False
+
+    # 12. CSS dimensions
+    if _CSS_DIM_RE.search(s):
+        return False
+
+    # 13. Percentage values
+    if _PERCENT_RE.search(s):
+        return False
+
+    # 14. Paths with 2+ segments
+    if _PATH_RE.search(s) or _PATH_SIMPLE_RE.match(s):
+        return False
+
+    # 2. Medical/ICD codes (check after whitelist to avoid rejecting 'ai' etc.)
+    # Only reject if the ENTIRE string is a code-like pattern
+    if len(low) <= 6 and _MEDICAL_CODE_RE.match(low) and not low.isalpha():
+        return False
+    if _MEDICAL_CODE2_RE.match(low):
+        return False
+
+    # 3. snake_case with 3+ segments
+    if _SNAKE_3_RE.match(low):
+        return False
+
+    # 4. Internal protocol codes: word_digits
+    if _PROTO_CODE_RE.match(low):
+        return False
+
+    # Dotfiles and dot-prefixed paths
+    if low.startswith('.'):
+        return False
+
+    # Glob patterns
+    if '*' in s:
+        return False
+
+    # Pure numeric
+    if s.replace('.', '').replace('-', '').isdigit():
+        return False
+
+    # Strings with = (config-like: key=value)
+    if '=' in s and len(s.split()) <= 2:
+        return False
+
+    # Single punctuation char or single flag like -v
+    if len(s) <= 2 and not s[0].isalnum():
+        return False
+
+    # Quoted strings (starts with quote)
+    if s.startswith("'") or s.startswith('"'):
+        return False
+
+    # Lone punctuation words: "% character", "& prefix"
+    if s[0] in '%&' and len(s.split()) <= 2:
+        return False
+
+    # Dimension-like: 1184x864, 768x1344
+    if re.match(r'^\d+x\d+', s):
+        return False
+
+    return True
+
 
 # ---------------------------------------------------------------------------
 # Alias normalization
@@ -220,13 +402,19 @@ def select_best_match(entity_name: str, results: List[Dict]) -> Optional[Dict]:
 # Entity extraction from .ttl files
 # ---------------------------------------------------------------------------
 
-def extract_entities_from_ttl(ttl_paths: List[str]) -> List[str]:
+def extract_entities_from_ttl(ttl_paths: List[str]) -> tuple:
     """Extract unique entity labels from .ttl files.
 
     Finds all resources with rdf:type devkg:Entity and rdfs:label,
-    deduplicates, and returns sorted labels.
+    deduplicates, and returns (sorted_labels, session_counts) where
+    session_counts maps each label to the number of distinct .ttl files
+    it appears in.
     """
-    labels = set()
+    from collections import defaultdict
+
+    # label -> set of file paths where it appears
+    label_sessions: Dict[str, set] = defaultdict(set)
+
     for path in ttl_paths:
         g = Graph()
         try:
@@ -237,9 +425,12 @@ def extract_entities_from_ttl(ttl_paths: List[str]) -> List[str]:
 
         for entity_node in g.subjects(RDF.type, DEVKG.Entity):
             for label_lit in g.objects(entity_node, RDFS.label):
-                labels.add(str(label_lit).strip())
+                label = str(label_lit).strip()
+                label_sessions[label].add(path)
 
-    return sorted(labels)
+    labels = sorted(label_sessions.keys())
+    session_counts = {label: len(paths) for label, paths in label_sessions.items()}
+    return labels, session_counts
 
 
 def extract_entity_contexts(ttl_paths: List[str]) -> Dict[str, str]:
@@ -387,6 +578,7 @@ def link_entity_list(
     unlinked = 0
     low_confidence = 0
     cached_hits = 0
+    filtered_count = 0
     ambiguous = []
     linked_pairs = []  # (uri, qid) for deduplication
 
@@ -394,10 +586,24 @@ def link_entity_list(
         mode = "agentic (LangGraph)" if agentic else "heuristic"
         print(f"Processing {len(entity_labels)} entities (mode: {mode}, workers: {max_workers})...")
 
+    # --- Phase 0.5: Pre-filter garbage entities ---
+    linkable_labels = []
+    for raw_label in entity_labels:
+        label = normalize_label(raw_label, aliases)
+        if not is_linkable_entity(label):
+            filtered_count += 1
+            if verbose:
+                print(f"  [skipped] {label} — filtered (garbage)")
+            continue
+        linkable_labels.append(raw_label)
+
+    if verbose:
+        print(f"Pre-filter: {filtered_count} filtered, {len(linkable_labels)} passed")
+
     # --- Phase 1: Process cache hits sequentially, collect misses ---
     cache_misses = []  # (raw_label, label, uri)
 
-    for raw_label in entity_labels:
+    for raw_label in linkable_labels:
         label = normalize_label(raw_label, aliases)
         if label != raw_label and verbose:
             print(f"  alias: '{raw_label}' -> '{label}'")
@@ -552,12 +758,15 @@ def link_entity_list(
 
     if verbose:
         total = len(entity_labels)
+        linkable = len(linkable_labels)
         print(f"\n{'='*60}")
         print(f"Summary")
         print(f"{'='*60}")
         print(f"Total entities:    {total}")
-        print(f"Linked:            {linked} ({linked/total*100:.1f}%)" if total else "")
-        print(f"Unlinked:          {unlinked} ({unlinked/total*100:.1f}%)" if total else "")
+        print(f"Pre-filtered:      {filtered_count} ({filtered_count/total*100:.1f}%)" if total else "")
+        print(f"Linkable:          {linkable} ({linkable/total*100:.1f}%)" if total else "")
+        print(f"Linked:            {linked} ({linked/linkable*100:.1f}%)" if linkable else "")
+        print(f"Unlinked:          {unlinked} ({unlinked/linkable*100:.1f}%)" if linkable else "")
         print(f"Low confidence:    {low_confidence}")
         print(f"Cache hits:        {cached_hits}")
         print(f"Deduplicated:      {dedup_count}")
@@ -611,6 +820,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--workers", type=int, default=DEFAULT_WORKERS,
         help=f"Number of parallel workers for cache misses (default: {DEFAULT_WORKERS})",
     )
+    parser.add_argument(
+        "--min-sessions", type=int, default=2,
+        help="Only link entities appearing in at least N sessions/files (default: 2)",
+    )
     return parser
 
 
@@ -635,10 +848,34 @@ def main():
         if verbose:
             print(f"Batch mode: reading {len(args.ttl_inputs)} .ttl file(s)...")
 
-        labels = extract_entities_from_ttl(args.ttl_inputs)
+        labels, session_counts = extract_entities_from_ttl(args.ttl_inputs)
         if not labels:
             print("No entities with rdf:type devkg:Entity found.", file=sys.stderr)
             sys.exit(1)
+
+        # --- Min-sessions filtering ---
+        min_sessions = args.min_sessions
+        if min_sessions > 1:
+            # Build session counts for normalized labels (aliases may merge counts)
+            normalized_session_counts: Dict[str, int] = {}
+            for lbl in labels:
+                norm = normalize_label(lbl, aliases)
+                current = normalized_session_counts.get(norm, 0)
+                normalized_session_counts[norm] = max(current, session_counts.get(lbl, 0))
+
+            total_unique = len(set(normalize_label(lbl, aliases) for lbl in labels))
+            passing = [lbl for lbl in labels
+                       if normalized_session_counts.get(normalize_label(lbl, aliases), 0) >= min_sessions]
+            passing_unique = len(set(normalize_label(lbl, aliases) for lbl in passing))
+            filtered_out = total_unique - passing_unique
+
+            if verbose:
+                print(f"\nMin-sessions filter (threshold: {min_sessions}):")
+                print(f"  Total unique entities:  {total_unique}")
+                print(f"  Passing (>= {min_sessions} sessions): {passing_unique}")
+                print(f"  Filtered out:           {filtered_out} ({filtered_out/total_unique*100:.1f}%)" if total_unique else "")
+
+            labels = passing
 
         # Extract triple-based context for disambiguation
         if agentic and verbose:

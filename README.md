@@ -93,21 +93,30 @@ Cursor (planned)      --+      curated predicates)              |
    PROV-O + SIOC session structure plus knowledge triples.
 
 2. TRIPLE EXTRACTION (LLM-powered)
-   Each assistant message --> LLM --> (subject, predicate, object) triples
-   24 curated predicates | stopword filter | entity length filter (1-3 words)
-   Retry on JSON truncation | closed-world vocabulary (deviations fuzzy-matched)
+   Each assistant message --> LLM --> top 10 (subject, predicate, object) triples
+   24 curated predicates | capped at 10 triples/message (prioritizes architecture)
+   Closed-world vocabulary (deviations fuzzy-matched) | retry on JSON truncation
 
-3. ENTITY LINKING (context-aware, agentic)
+3. ENTITY FILTERING (two-level)
+   Level 1: is_valid_entity() in triple_extraction.py -- rejects garbage at extraction
+   Level 2: is_linkable_entity() in link_entities.py -- pre-filters before Wikidata
+   Catches: filenames (*.py), hex colors (#8776f6), CLI flags (--force),
+            ICD codes (j458), snake_case identifiers, DOM selectors, etc.
+   48 whitelisted short terms bypass filters (ai, api, llm, rdf, sql, etc.)
+
+4. ENTITY LINKING (context-aware, agentic)
    For each entity:
    +-- Normalize via entity_aliases.json (161 mappings: k8s-->kubernetes, etc.)
+   +-- Frequency filter: --min-sessions 2 (default) -- only links entities
+   |   appearing in 2+ sessions (~77% reduction)
    +-- Check SQLite cache
    +-- If miss --> LangGraph ReAct agent (LLM + Wikidata API tool)
    +-- Confidence threshold 0.7 --> owl:sameAs link
    +-- Entity dedup: same QID --> owl:sameAs between aliases
 
-4. LOAD --> Apache Jena Fuseki (SPARQL endpoint)
+5. LOAD --> Apache Jena Fuseki (SPARQL endpoint)
 
-5. QUERY --> SPARQL (via Claude Code skill or directly)
+6. QUERY --> SPARQL (via Claude Code skill or directly)
 ```
 
 ## Supported Platforms
@@ -463,6 +472,9 @@ The entire pipeline runs for less than $2 on a typical developer's full session 
 
 - **Assistant-only extraction**: Only assistant messages are sent to the LLM for triple extraction. User messages are short prompts with no extractable knowledge.
 - **Closed-world predicates**: The LLM is constrained to 24 predicates. The prompt includes wrong/correct examples to keep `relatedTo` fallback under 1%.
+- **Top-10 extraction cap**: Extracts at most 10 triples per message, prioritizing architectural decisions and technology choices over trivial details.
+- **Two-level entity filtering**: `is_valid_entity()` at extraction time + `is_linkable_entity()` before Wikidata linking. Rejects ~6% garbage (filenames, hex colors, CLI flags, ICD codes, DOM selectors, version strings). 48 whitelisted short terms bypass all filters.
+- **Frequency-based linking**: `--min-sessions 2` (default) only links entities appearing in 2+ sessions. ~77% of entities are single-session noise, dramatically reducing linking cost.
 - **Dual storage**: Direct edges for fast graph traversal AND reified `KnowledgeTriple` nodes for provenance. Query either depending on your needs.
 - **Context-aware entity linking**: Neighboring KnowledgeTriple relationships are passed as disambiguation context to the ReAct agent. "condition" resolves to disease (not programming conditional) when surrounded by medical triples.
 - **Agentic linker over heuristic**: LangGraph ReAct agent (LLM + Wikidata API tool) achieves 7/7 precision vs ~50% for keyword heuristic. Resolves abbreviations like k8s, otel, tf.

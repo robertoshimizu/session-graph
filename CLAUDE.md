@@ -78,9 +78,13 @@ Closed-world design: the LLM is instructed to use ONLY these predicates. A norma
   +-- Reads source format
   +-- Creates PROV-O + SIOC structure (sessions, messages, authors)
   +-- Calls triple_extraction.py for each assistant message
-  |   +-- Sends text to LLM -> (subject, predicate, object) triples
+  |   +-- Sends text to LLM -> top 10 (subject, predicate, object) triples
+  |       +-- Capped at 10 triples per message (top 10 by importance)
   |       +-- Closed-world predicate vocab (24 predicates)
-  |       +-- Stopword filter (rejects /exit, 1400px, single chars)
+  |       +-- Level 1 entity filter: is_valid_entity() -- 13 filter groups
+  |       |   (filenames, hex colors, CLI flags, ICD codes, snake_case,
+  |       |    DOM selectors, version strings, CSS dims, issue refs, etc.)
+  |       |   48 whitelisted short terms bypass all filters
   |       +-- Entity length filter (1-3 words only)
   |       +-- Retry on JSON truncation (max 2 retries)
   +-- Outputs .ttl with session structure + knowledge triples
@@ -98,7 +102,11 @@ Closed-world design: the LLM is instructed to use ONLY these predicates. A norma
 
   +-- Extracts all devkg:Entity labels from input .ttl files
   +-- Normalizes via entity_aliases.json (161 mappings: k8s->kubernetes, etc.)
-  +-- For each entity:
+  +-- Level 2 pre-filter: is_linkable_entity() -- rejects ~6% garbage
+  |   (catches entities that slipped through Level 1 or pre-date the filter)
+  +-- Frequency filter: --min-sessions N (default 2) -- only links entities
+  |   appearing in 2+ sessions. Reduces linking set by ~77%.
+  +-- For each entity that passes:
   |   +-- Check SQLite cache (.entity_cache.db)
   |   +-- If miss -> agentic_linker_langgraph.py (ReAct agent)
   |   |   +-- LangGraph + Gemini 2.5 Flash
@@ -223,6 +231,9 @@ python pipeline/load_fuseki.py output/*.ttl
 - **Entity deduplication**: Entities sharing the same Wikidata QID get `owl:sameAs` to each other (e.g., `medication` == `medicamento` via Q12140).
 - **Subagent filtering**: `bulk_process.py` filters out subagent `.jsonl` files to avoid 76% knowledge triple duplication from overlapping content with parent sessions.
 - **Model comparison** (on 79 assistant messages): Gemini 2.5 Flash is best overall (142 triples, 15 predicates, 0.7% relatedTo). Flash-Lite is noisy (11% relatedTo). Claude Haiku 4.5 has high precision but low recall (37 triples). Only 20% triple overlap between models.
+- **Top-10 extraction cap**: Prompt instructs "extract at most 10 triples per message, prioritize architectural decisions and technology choices". Hard cap enforced in parsing. Median extraction rate is ~1.4 triples/message so most messages are unaffected; caps the noisy long tail.
+- **Two-level entity filtering**: Level 1 (`is_valid_entity()` in `triple_extraction.py`) prevents garbage at extraction time -- 13 filter groups covering filenames, hex colors, CLI flags, ICD codes, snake_case identifiers, DOM selectors, version strings, CSS dimensions, issue refs, function calls, npm scopes, percentage values. Level 2 (`is_linkable_entity()` in `link_entities.py`) pre-filters before Wikidata API calls. Both share a 48-term whitelist of known-good short terms (`ai`, `api`, `llm`, `rdf`, etc.).
+- **Frequency-based linking threshold**: `--min-sessions 2` (default) only links entities appearing in 2+ sessions. ~77% of entities appear in only 1 session (noise), dramatically reducing linking cost.
 - **Entity boundaries**: Prompt enforces 1-3 word entities; `is_valid_entity()` rejects 4+ words, paths, dimension strings, single chars.
 - **Context-aware entity linking**: `link_entities.py` extracts neighboring KnowledgeTriple relationships from .ttl files and passes them as context to the ReAct agent. Improves disambiguation for ambiguous labels (e.g., "condition" -> disease vs programming conditional).
 - **`FILTER(LANG(?label) = "")`**: Used in all SPARQL queries to avoid duplicate rows from lang-tagged vs untagged literals.

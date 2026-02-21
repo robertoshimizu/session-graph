@@ -5,10 +5,10 @@ This module builds an ontologist prompt and parses the LLM response into
 normalized (subject, predicate, object) triples aligned with the devkg ontology.
 
 Usage:
-    from pipeline.llm_providers import get_provider
+    from pipeline.vertex_ai import get_gemini_model
     from pipeline.triple_extraction import extract_triples_gemini
 
-    model = get_provider("gemini", "gemini-2.5-flash")
+    model = get_gemini_model()
     triples = extract_triples_gemini(model, "Neo4j stores data as a property graph")
     # [{"subject": "neo4j", "predicate": "isTypeOf", "object": "property graph"}]
 """
@@ -66,19 +66,100 @@ STOPWORDS = {
     "[object object]", "object object",
 }
 
+# Known-good short terms that should always pass validation.
+# These are well-known tech abbreviations that might otherwise be caught
+# by the 2-char or other filters.
+WHITELISTED_ENTITIES = {
+    "ai", "ui", "db", "os", "ip", "ci", "cd", "js", "ts", "go", "ml",
+    "api", "sdk", "sql", "css", "jwt", "ssh", "ssl", "tls", "dns", "cdn",
+    "gpu", "cpu", "ram", "ssd", "hdd", "cli", "gui", "ide", "nlp", "llm",
+    "rag", "rdf", "owl", "uri", "url", "xml", "csv", "pdf", "svg", "png",
+    "gif", "npm", "pip", "git", "aws", "gcp", "mcp", "rpa",
+}
+
+# File extensions commonly seen in code paths and filenames
+_FILE_EXTENSIONS = (
+    r"ts|tsx|js|jsx|py|json|yaml|yml|css|html|md|sql|sh|env|db|sqlite|txt|"
+    r"png|csv|jsonl|xml|toml|lock|cfg|ini|log|ttl|rdf|sparql|ipynb|whl|gz|"
+    r"tar|zip|jpg|jpeg|gif|svg|wasm|map|d\.ts|mjs|cjs"
+)
+
+# Precompiled regex patterns for performance (used in is_valid_entity)
+_RE_FILENAME = re.compile(rf"^[\w@./-][\w./-]*\.({_FILE_EXTENSIONS})$", re.IGNORECASE)
+_RE_ICD_SHORT = re.compile(r"^[a-z]\d{2,}(\.\d+)?$", re.IGNORECASE)
+_RE_ICD_UNDERSCORE = re.compile(r"^[a-z]+_\d{3}_\d{3}$", re.IGNORECASE)
+_RE_PROTOCOL_CODE = re.compile(r"^[a-z]+_\d+$", re.IGNORECASE)
+_RE_SNAKE_CASE_3SEG = re.compile(r"^[a-z][a-z0-9]*(_[a-z0-9]+){2,}$")
+_RE_NUMERIC_PREFIX = re.compile(r"^\d+\s")
+_RE_VERSION_DECIMAL = re.compile(r"^\d+\.\d+")
+_RE_BRACKETS = re.compile(r"[\[\]]")
+_RE_PARENS = re.compile(r"[()]")
+_RE_CSS_DIMENSION = re.compile(r"\d+(px|vh|vw|em|rem|pt|%)\b", re.IGNORECASE)
+
 
 def is_valid_entity(name: str) -> bool:
-    """Return False for entities that are noise rather than real technical concepts."""
+    """Return False for entities that are noise rather than real technical concepts.
+
+    Filters (in order):
+    - Empty / single char
+    - Stopwords
+    - Whitelist bypass for known-good short terms
+    - Paths, special-char prefixes, filenames
+    - Medical/ICD codes, protocol codes, snake_case identifiers
+    - Numeric prefixes, versions, dimensions, percentages
+    - Code syntax fragments (brackets, parens, npm scopes)
+    - 2-char ambiguous noise
+    - 4+ word phrases
+    """
     if not name or len(name) <= 1:
         return False
     if name in STOPWORDS:
         return False
+
+    # --- Whitelist: known-good short terms skip all other filters ---
+    if name in WHITELISTED_ENTITIES:
+        return True
+
+    # --- Starts with special characters (hex colors, issue refs, npm scopes,
+    #     pricing, globs, dotfiles, CLI flags, ports, DOM selectors) ---
+    if name[0] in ("#", "@", "$", "*", "!", "~", ".", ":", "-"):
+        return False
+
     # Paths or shell commands
     if name.startswith("/") or "\\" in name:
         return False
+
+    # --- Filenames with extensions (e.g., __init__.py, config.json, auth-utils.ts) ---
+    if _RE_FILENAME.match(name):
+        return False
+
+    # --- Medical/ICD codes (e.g., a021, j458, k25.0, e_148) ---
+    if _RE_ICD_SHORT.match(name):
+        return False
+    # ICD pattern with double underscore segments (e.g., ansied_022_001)
+    if _RE_ICD_UNDERSCORE.match(name):
+        return False
+
+    # --- Internal protocol codes (e.g., cefaleia_007, coloproc_015, dengue_008) ---
+    if _RE_PROTOCOL_CODE.match(name):
+        return False
+
+    # --- snake_case code identifiers with 3+ segments (e.g., anthropic_api_key) ---
+    if _RE_SNAKE_CASE_3SEG.match(name):
+        return False
+
+    # --- Numeric-prefixed phrases (e.g., "0 bytes data", "1 llm call") ---
+    if _RE_NUMERIC_PREFIX.match(name):
+        return False
+
+    # --- Version/decimal strings (e.g., "0.3", "0.75 confidence", "5.0.0") ---
+    if _RE_VERSION_DECIMAL.match(name):
+        return False
+
     # Dimension strings like "1400px", "800px+ width"
     if re.match(r"^\d+px", name):
         return False
+
     # Pure numbers
     if re.match(r"^\d+$", name):
         return False
@@ -100,6 +181,31 @@ def is_valid_entity(name: str) -> bool:
     # Fraction/ratio strings (e.g., "8/8h", "3/4")
     if re.match(r"^\d+/\d+", name):
         return False
+
+    # --- CSS dimensions in phrases (e.g., "100vh", "height 280px", "max height 200px") ---
+    if _RE_CSS_DIMENSION.search(name):
+        return False
+
+    # --- Percentage values (e.g., "100%", "50% discount") ---
+    if "%" in name:
+        return False
+
+    # --- Code syntax fragments (e.g., "[]", "candidates[0]", "[object object]") ---
+    if _RE_BRACKETS.search(name):
+        return False
+
+    # --- Function calls (e.g., "_init_vertex_credentials()", "express.json()") ---
+    if _RE_PARENS.search(name):
+        return False
+
+    # --- npm scoped packages (e.g., "@radix-ui/react-dialog") ---
+    # (Already caught by special-char prefix check for '@', but kept for clarity)
+
+    # --- Two-char ambiguous noise (e.g., "aa", "bp", "ct", "df") ---
+    # Well-known 2-char terms are in WHITELISTED_ENTITIES and already returned True above
+    if len(name) == 2:
+        return False
+
     # Reject phrases with 4+ words — entities should be 1-3 words
     if len(name.split()) > 3:
         return False
@@ -126,6 +232,7 @@ RULES:
 5. Return [] for messages with no extractable technical knowledge.
 6. Each triple must have "subject", "predicate", and "object" string fields.
 7. Entity names MUST be 1-3 words maximum. Use the most common/recognized name for the technology, tool, or concept. NEVER use full phrases or descriptions as entity names.
+8. Extract AT MOST 10 triples per message. If you identify more than 10 relationships, return only the top 10 most important ones. Prioritize relationships that capture architectural decisions, technology choices, and integration patterns over trivial implementation details.
    - GOOD entities: "neo4j", "python", "claude agent sdk", "urinary tract infection"
    - BAD entities: "notification when claude finishes responding", "follow-up if no improvement in 48h", "migration from npm to native"
    - If you can't name it in 1-3 words, it's not an entity — it's a description. Skip it.
@@ -352,6 +459,12 @@ def _parse_triples_response(raw: str) -> list[dict] | None:
                 and is_valid_entity(normalized["object"])):
             triples.append(normalized)
 
+    # Enforce max 10 triples per message — keep the first 10 (LLM is instructed
+    # to prioritize the most important relationships, so order matters)
+    MAX_TRIPLES_PER_MESSAGE = 10
+    if len(triples) > MAX_TRIPLES_PER_MESSAGE:
+        triples = triples[:MAX_TRIPLES_PER_MESSAGE]
+
     return triples
 
 
@@ -371,9 +484,7 @@ def extract_triples_gemini(model, text: str) -> list[dict]:
     3. Unparseable response — retry with shorter input
 
     Args:
-        model: An LLMProvider instance (from llm_providers.get_provider) or any
-               object with a generate_content(prompt) method returning an object
-               with a .text property.
+        model: A vertexai GenerativeModel instance (from vertex_ai.get_gemini_model).
         text: The text to extract triples from.
 
     Returns:
