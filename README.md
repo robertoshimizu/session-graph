@@ -46,10 +46,10 @@ From real-world usage across 52 sessions:
 
 | Metric | Value |
 |--------|-------|
-| Total triples in Fuseki | 138,802 |
-| Sessions indexed | 52 |
-| Knowledge triples extracted | ~2,500+ |
-| Distinct entities | ~4,600+ |
+| Total triples in Fuseki | 1,322,167 |
+| Sessions indexed | 652 |
+| Knowledge triples extracted | ~30,000+ |
+| Distinct entities | ~15,000+ |
 | Wikidata-linked entities | ~33% |
 | Curated predicates | 24 (with <1% `relatedTo` fallback) |
 | Platforms supported | 4 (Claude Code, DeepSeek, Grok, Warp) |
@@ -144,15 +144,16 @@ cd session-graph
 cp .env.example .env
 # Edit .env with your LLM provider API key (see Provider Support below)
 
-# 3. Install
+# 3. Install (for manual/bulk processing)
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
-# 4. Start Fuseki (pick one)
-docker run -d --name fuseki -p 3030:3030 stain/jena-fuseki  # Docker
-# OR download from https://jena.apache.org/download/ and run ./fuseki-server
+# 4. Start all services (Fuseki + RabbitMQ + pipeline-runner)
+docker compose up -d
+# Fuseki SPARQL UI: http://localhost:3030
+# RabbitMQ Management UI: http://localhost:15672 (devkg/devkg)
 
-# 5. Process a single session
+# 5. Process a single session (manual)
 python -m pipeline.jsonl_to_rdf path/to/session.jsonl output/session.ttl
 
 # 6. Link entities to Wikidata
@@ -163,6 +164,28 @@ PYTHONUNBUFFERED=1 python -m pipeline.link_entities \
 python -m pipeline.load_fuseki output/*.ttl
 
 # 8. Query at http://localhost:3030
+```
+
+### Automatic Processing (Recommended)
+
+With Docker Compose running, every Claude Code session is automatically processed:
+
+```
+Claude Code session ends
+  → stop_hook.sh publishes to RabbitMQ (~33ms, non-blocking)
+  → pipeline-runner container picks up the job
+  → Extracts triples, generates .ttl, uploads to Fuseki
+  → Failed jobs go to dead-letter queue for inspection
+```
+
+Configure the hook in `~/.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "Stop": [{"hooks": [{"type": "command", "command": "/path/to/hooks/stop_hook.sh", "timeout": 5}]}]
+  }
+}
 ```
 
 ### Bulk Processing

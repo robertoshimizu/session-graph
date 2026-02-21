@@ -2,6 +2,19 @@
 
 All notable changes to session-graph are documented here.
 
+## [0.4.0] - 2026-02-21
+
+### Added
+- **RabbitMQ-based pipeline automation** — stop hook now publishes to RabbitMQ (33ms) instead of running Python in a background subshell (which got killed by Claude Code). A long-running `pipeline-runner` container consumes the queue independently.
+- **Docker Compose stack** — `rabbitmq` (management UI on :15672), `pipeline-runner` (pika consumer), and existing `fuseki` in a single `docker compose up -d`. Dead-letter queue (`devkg_jobs_failed`) for failed jobs.
+- **Vertex AI credentials in container** — `queue_consumer.py` decodes `GOOGLE_APPLICATION_CREDENTIALS_BASE64` from `.env` at startup, enabling Gemini via Vertex AI inside Docker.
+- **Fuseki auth support** — `load_fuseki.py` functions now accept optional `auth` tuple; Docker Fuseki uses admin:admin.
+- **Integration test** (`tests/test_integration.sh`) — 16-point end-to-end test covering services, queue, consumer processing, .ttl output, and Fuseki upload.
+
+### Changed
+- `hooks/stop_hook.sh` rewritten: `curl` POST to RabbitMQ HTTP API replaces background Python process.
+- `pipeline/load_fuseki.py`: `ensure_dataset()` and `upload_turtle()` accept optional `auth` parameter (backward-compatible).
+
 ## [0.3.0] - 2026-02-21
 
 ### Added

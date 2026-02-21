@@ -125,11 +125,6 @@ def process_message(body: bytes) -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     output_file = OUTPUT_DIR / f"{basename}.ttl"
 
-    # Watermark check: skip if output is newer than input
-    if output_file.exists() and output_file.stat().st_mtime > os.path.getmtime(container_path):
-        log("INFO", f"Skipping (already processed): {basename}")
-        return
-
     log("INFO", f"Processing: {basename}")
 
     # Import pipeline modules (deferred to avoid import errors during setup)

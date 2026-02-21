@@ -13,13 +13,57 @@ Usage:
     # [{"subject": "neo4j", "predicate": "isTypeOf", "object": "property graph"}]
 """
 
+import hashlib
 import json
 import re
+import sqlite3
 import sys
+from pathlib import Path
 
 
 # Global counter for truncation events across the pipeline run
 truncation_count = 0
+
+
+# =============================================================================
+# SQLite Triple Cache
+# =============================================================================
+
+_CACHE_PATH = Path(__file__).parent / ".triple_cache.db"
+
+
+def _get_cache_conn() -> sqlite3.Connection:
+    conn = sqlite3.connect(str(_CACHE_PATH))
+    conn.execute("""CREATE TABLE IF NOT EXISTS triple_cache (
+        message_uuid TEXT PRIMARY KEY,
+        triples_json TEXT NOT NULL,
+        text_hash TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )""")
+    return conn
+
+
+def get_cached_triples(message_uuid: str) -> list[dict] | None:
+    """Return cached triples for a message UUID, or None on cache miss."""
+    conn = _get_cache_conn()
+    row = conn.execute(
+        "SELECT triples_json FROM triple_cache WHERE message_uuid = ?",
+        (message_uuid,),
+    ).fetchone()
+    conn.close()
+    return json.loads(row[0]) if row else None
+
+
+def cache_triples(message_uuid: str, triples: list[dict], text: str) -> None:
+    """Store extracted triples in the cache, keyed by message UUID."""
+    conn = _get_cache_conn()
+    text_hash = hashlib.sha256(text.encode()).hexdigest()[:16]
+    conn.execute(
+        "INSERT OR REPLACE INTO triple_cache (message_uuid, triples_json, text_hash) VALUES (?, ?, ?)",
+        (message_uuid, json.dumps(triples), text_hash),
+    )
+    conn.commit()
+    conn.close()
 
 
 # =============================================================================

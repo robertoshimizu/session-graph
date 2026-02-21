@@ -27,7 +27,7 @@ from pipeline.common import (
     create_model_node, create_message_node, create_project_node,
     add_triples_to_graph,
 )
-from pipeline.triple_extraction import extract_triples_gemini
+from pipeline.triple_extraction import extract_triples_gemini, get_cached_triples, cache_triples
 
 
 def detect_project(jsonl_path: str) -> str | None:
@@ -107,6 +107,7 @@ def build_graph(jsonl_path: str, skip_extraction: bool = False, model=None, deve
     assistant_count = 0
     tool_call_count = 0
     triple_count = 0
+    cache_hits = 0
 
     for i, entry in enumerate(entries):
         entry_type = entry["type"]
@@ -208,17 +209,25 @@ def build_graph(jsonl_path: str, skip_extraction: bool = False, model=None, deve
 
         # Gemini triple extraction (assistant messages only — that's where the knowledge is)
         if not skip_extraction and model is not None and full_text.strip() and entry_type == "assistant":
-            triples = extract_triples_gemini(model, full_text)
+            cached = get_cached_triples(uuid)
+            if cached is not None:
+                triples = cached
+                cache_hits += 1
+            else:
+                triples = extract_triples_gemini(model, full_text)
+                cache_triples(uuid, triples, full_text)
+                time.sleep(0.5)
+
             add_triples_to_graph(g, msg_uri, triples, session_uri)
             triple_count += len(triples)
 
             if triples:
-                print(f"  [{i+1}/{len(entries)}] {len(triples)} triples extracted", file=sys.stderr)
+                label = "cached" if cached is not None else "extracted"
+                print(f"  [{i+1}/{len(entries)}] {len(triples)} triples {label}", file=sys.stderr)
 
-            time.sleep(0.5)
-
+    cache_msg = f", {cache_hits} cache hits" if cache_hits else ""
     print(f"  Processed: {user_count} user messages, {assistant_count} assistant messages, "
-          f"{tool_call_count} tool calls, {triple_count} knowledge triples", file=sys.stderr)
+          f"{tool_call_count} tool calls, {triple_count} knowledge triples{cache_msg}", file=sys.stderr)
 
     return g
 
