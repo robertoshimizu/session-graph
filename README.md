@@ -205,26 +205,34 @@ Configure the hook in `~/.claude/settings.json`:
 }
 ```
 
-### Bulk Processing
+### Bulk Processing (Backfill Your History)
 
-For processing many sessions at once:
+Once automatic processing is running, it only captures **new** sessions going forward. But you likely have weeks or months of past Claude Code sessions already sitting on disk — and that's where most of the value is.
+
+Claude Code stores every session as a `.jsonl` file under `~/.claude/projects/`. Each project directory contains one file per session. A typical developer accumulates hundreds of sessions over a few months. Bulk processing lets you backfill all of them into the knowledge graph in one shot.
+
+**This is optional but highly recommended.** The more sessions in the graph, the richer the connections — you'll find patterns and relationships you didn't know existed across your past work.
 
 ```bash
-# Option A: Batch (50% cheaper, parallel via Vertex AI)
+source .venv/bin/activate
+
+# Option A: Batch (50% cheaper, parallel via Vertex AI — requires GCP setup)
 python -m pipeline.bulk_batch submit --sort newest
 python -m pipeline.bulk_batch status --wait --poll-interval 60
 python -m pipeline.bulk_batch collect
 
-# Option B: Sequential (simpler, one session at a time)
+# Option B: Sequential (simpler, works with any provider)
 python -m pipeline.bulk_process --limit 50 --sort newest --skip-linking
 
-# Then link entities in parallel (both options)
+# Then link entities to Wikidata (both options)
 PYTHONUNBUFFERED=1 python -m pipeline.link_entities \
   --input output/claude/*.ttl --output output/claude/wikidata_links.ttl --workers 8
 
 # Load into Fuseki (--auth required for Docker Fuseki)
 python -m pipeline.load_fuseki output/claude/*.ttl --auth admin:admin
 ```
+
+After the backfill, automatic processing takes over — every future session is indexed as you work, with no manual steps.
 
 ### Other Platforms
 
