@@ -2,6 +2,20 @@
 
 All notable changes to session-graph are documented here.
 
+## [0.6.0] - 2026-02-21
+
+### Added
+- **Interactive `setup.sh`** — single-command setup from clone to working pipeline. Checks prerequisites (Python 3.11+, Docker, jq), creates `.env` with interactive provider selection, installs provider-specific Python dependencies, creates output directories, starts Docker Compose, optionally installs Claude Code stop hook, and runs a smoke test. Idempotent — re-running skips completed steps.
+- **`--auth` CLI flag on `load_fuseki.py`** — `--auth admin:admin` for Docker Fuseki authentication. Fixes 401 errors newcomers hit out of the box. Also added `auth` parameter to `count_triples()`.
+- **Sample session fixture** (`tests/fixtures/sample_session.jsonl`) — minimal 5-message Claude Code session (FastAPI/SQLAlchemy/Docker) that produces 48 RDF triples with `--skip-extraction` (no LLM calls needed).
+- **README troubleshooting table** — covers Fuseki 401, RabbitMQ unreachable, no sessions, output buffering, stop hook, ModuleNotFoundError.
+
+### Changed
+- **`hooks/stop_hook.sh`** — replaced hardcoded `/Users/robertoshimizu/...` paths with dynamic `$(dirname "$0")/..` resolution. Now works from any clone location.
+- **README Quick Start** — `./setup.sh` is now the primary path. Manual 8-step instructions moved to collapsible `<details>` section.
+- **`.gitignore`** — `hooks/` directory is now tracked (was fully ignored). Only `hooks/*.log` is excluded.
+- All `load_fuseki` examples in README updated to include `--auth admin:admin`.
+
 ## [0.5.0] - 2026-02-21
 
 ### Added
