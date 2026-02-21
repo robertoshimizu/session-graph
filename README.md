@@ -34,6 +34,7 @@ The key insight: **a knowledge graph without relationships is just a tag cloud.*
 
 ### What makes this different
 
+- **Real-time ingestion**: A Claude Code Stop hook extracts knowledge from every assistant response as it happens -- zero manual effort. Your KG grows as you work.
 - **Multi-platform**: Ingests Claude Code, ChatGPT, DeepSeek, Grok, and Warp into a single unified graph. No other tool does this.
 - **Formal ontology**: Composes 5 W3C/ISO standards (PROV-O, SIOC, SKOS, Dublin Core, Schema.org) instead of inventing a custom schema.
 - **Wikidata linking**: Entities are disambiguated against 100M+ Wikidata items via `owl:sameAs`. "k8s", "kubernetes", and "K8s" all resolve to [Q22661306](https://www.wikidata.org/wiki/Q22661306).
@@ -42,15 +43,15 @@ The key insight: **a knowledge graph without relationships is just a tag cloud.*
 
 ## Results
 
-From real-world usage across 52 sessions:
+From real-world usage across 617 Claude Code sessions:
 
 | Metric | Value |
 |--------|-------|
-| Total triples in Fuseki | 138,802 |
-| Sessions indexed | 52 |
-| Knowledge triples extracted | ~2,500+ |
-| Distinct entities | ~4,600+ |
-| Wikidata-linked entities | ~33% |
+| Total triples in Fuseki | 1,291,211 |
+| Sessions indexed | 617 |
+| Knowledge triples extracted | ~45,500 |
+| Distinct entities | ~26,200 |
+| Wikidata-linked entities | ~5,700 |
 | Curated predicates | 24 (with <1% `relatedTo` fallback) |
 | Platforms supported | 4 (Claude Code, DeepSeek, Grok, Warp) |
 | Entity linking precision | 7/7 (agentic ReAct linker) |
@@ -88,6 +89,11 @@ Cursor (planned)      --+      curated predicates)              |
 ### Pipeline in Detail
 
 ```
+0. REAL-TIME INGESTION (Stop hook -- automatic, per-response)
+   Claude Code response --> stop_hook.sh --> realtime_extract.py (background)
+   --> Gemini extraction (top 10) --> entity linking (parallel, cache-first)
+   --> Fuseki upload -- all invisible to the user (~22s with warm cache)
+
 1. SOURCE PARSING (per platform --> RDF Turtle)
    Each parser reads a platform-specific format and produces
    PROV-O + SIOC session structure plus knowledge triples.
@@ -165,9 +171,35 @@ python -m pipeline.load_fuseki output/*.ttl
 # 8. Query at http://localhost:3030
 ```
 
+### Real-Time Ingestion (automatic)
+
+Configure a Claude Code Stop hook to extract knowledge from every response automatically:
+
+```bash
+# Add to ~/.claude/settings.json:
+# {
+#   "hooks": {
+#     "Stop": [{
+#       "hooks": [{
+#         "type": "command",
+#         "command": "/path/to/session-graph/hooks/stop_hook.sh",
+#         "timeout": 5
+#       }]
+#     }]
+#   }
+# }
+
+# Monitor in real time:
+tail -f logs/realtime_hook.log
+```
+
+The hook fires after every assistant response, backgrounds `realtime_extract.py`, and exits immediately. The Python script extracts the last assistant message, runs Gemini triple extraction (top 10), links entities (parallel, cache-first), and uploads to Fuseki -- all invisible to the user (~22s with warm cache).
+
+Output: `output/realtime/{session-id}.ttl` (accumulates per session).
+
 ### Bulk Processing
 
-For processing many sessions at once:
+For processing many sessions at once (backfill or initial setup):
 
 ```bash
 # Option A: Batch (50% cheaper, parallel via Vertex AI)
@@ -431,12 +463,16 @@ session-graph/
 |   +-- entity_aliases.json               # 161 tech synonym mappings
 |   +-- bulk_process.py                   # Sequential bulk processor
 |   +-- bulk_batch.py                     # Vertex AI Batch Prediction
+|   +-- realtime_extract.py               # Per-response extraction + linking (Stop hook)
 |   +-- snapshot_links.py                 # Inspect entity linking progress
 |   +-- load_fuseki.py                    # Upload .ttl to Fuseki
 |   +-- sample_queries.sparql             # 14 SPARQL query templates
 |   +-- .entity_cache.db                  # SQLite cache (auto-created)
++-- hooks/
+|   +-- stop_hook.sh                     # Real-time KG ingestion (Stop hook)
 +-- .claude/skills/devkg-sparql/          # SPARQL skill for Claude Code
-+-- output/                               # Generated .ttl files
++-- output/claude/                        # Generated .ttl files (batch)
++-- output/realtime/                      # Generated .ttl files (real-time)
 +-- requirements.txt
 +-- .env.example
 +-- LICENSE
@@ -460,7 +496,7 @@ See any existing parser (e.g., `pipeline/jsonl_to_rdf.py`) as a template. The sh
 | Component | Cost |
 |-----------|------|
 | Triple extraction (batch) | ~$0.60 / 600 sessions |
-| Triple extraction (real-time) | ~$1.20 / 600 sessions |
+| Triple extraction (real-time) | ~$0.001 / response |
 | Entity linking | ~$0.10 / 1,000 entities |
 | Apache Jena Fuseki | Free (local) |
 | Wikidata API | Free (no auth required) |
@@ -478,6 +514,7 @@ The entire pipeline runs for less than $2 on a typical developer's full session 
 - **Dual storage**: Direct edges for fast graph traversal AND reified `KnowledgeTriple` nodes for provenance. Query either depending on your needs.
 - **Context-aware entity linking**: Neighboring KnowledgeTriple relationships are passed as disambiguation context to the ReAct agent. "condition" resolves to disease (not programming conditional) when surrounded by medical triples.
 - **Agentic linker over heuristic**: LangGraph ReAct agent (LLM + Wikidata API tool) achieves 7/7 precision vs ~50% for keyword heuristic. Resolves abbreviations like k8s, otel, tf.
+- **Real-time ingestion via Stop hook**: `stop_hook.sh` fires after every Claude Code response, backgrounding `realtime_extract.py` which extracts triples, links entities (parallel, cache-first), and uploads to Fuseki -- all invisible to the user (~22s with warm cache). Uses SHA256 watermarks per session to avoid re-processing.
 
 ## Lessons Learned
 

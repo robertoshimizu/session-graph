@@ -20,6 +20,13 @@ __pycache__/
 # Generated outputs (regenerable via pipeline)
 output/
 
+# Hook logs and lock file
+logs/
+.hook.lock
+
+# Real-time extraction outputs and watermarks
+output/realtime/
+
 # Binary data exports
 external_knowledge/
 
@@ -27,4 +34,3 @@ external_knowledge/
 cognee_eval/
 research/
 daemon/
-hooks/
