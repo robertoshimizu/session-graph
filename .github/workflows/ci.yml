@@ -32,4 +32,6 @@ jobs:
 
       - name: Unit tests
         run: pytest test/ -v --ignore=test/quick_links.ttl --ignore=test/wikidata_links.ttl
+        env:
+          PYTHONPATH: .
         if: hashFiles('test/test_*.py') != ''
