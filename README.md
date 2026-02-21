@@ -252,6 +252,30 @@ PYTHONUNBUFFERED=1 python -m pipeline.link_entities \
 python -m pipeline.load_fuseki output/**/*.ttl --auth admin:admin
 ```
 
+### Querying from Claude Code
+
+Once Fuseki has data, you don't need to write SPARQL by hand. session-graph ships with a **Claude Code skill** (`devkg-sparql`) that translates natural language questions into SPARQL queries, runs them against Fuseki, and returns formatted results.
+
+The skill is automatically available when you work inside the session-graph repo. From any project, you can invoke it with `/devkg-sparql`:
+
+```
+You:   /devkg-sparql What technologies have I used the most?
+Claude: [runs SPARQL hub detection query → returns top 20 entities by degree]
+
+You:   /devkg-sparql How does FastAPI relate to Pydantic?
+Claude: FastAPI --uses--> Pydantic (source: session abc123, Jan 15)
+
+You:   /devkg-sparql What sessions discussed authentication?
+Claude: [returns 3 sessions across Claude Code + DeepSeek with dates and source files]
+
+You:   /devkg-sparql What do I know about Kubernetes?
+Claude: [runs entity lookup, finds 12 relationships + Wikidata link to Q22661306]
+```
+
+The skill includes 14 local query templates (entity lookup, path discovery, hub detection, cross-session overlap, etc.) and 6 Wikidata traversal templates for enriching local entities with external knowledge. It falls back to grep-based session search if Fuseki is unreachable.
+
+To use it from other projects, add the skill path to your Claude Code settings or symlink `.claude/skills/devkg-sparql/` into your project.
+
 ## Why RDF/SPARQL?
 
 Most developer tools reach for Neo4j, vector databases, or JSON files. Here is why session-graph uses RDF and SPARQL instead.
