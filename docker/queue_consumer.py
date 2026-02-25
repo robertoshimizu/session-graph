@@ -6,6 +6,7 @@ into RDF Turtle, and uploads them to Fuseki.
 """
 
 import base64
+import hashlib
 import json
 import os
 import sys
@@ -44,10 +45,35 @@ OUTPUT_DIR = Path(os.environ.get("OUTPUT_DIR", "/app/output/claude"))
 QUEUE = "devkg_jobs"
 DLX = "devkg_jobs_dlx"
 DLQ = "devkg_jobs_failed"
+WATERMARK_FILE = OUTPUT_DIR / "watermarks.json"
 
 
 def log(level: str, msg: str):
     print(f"[{level}] {msg}", file=sys.stderr, flush=True)
+
+
+def file_hash(path: str) -> str:
+    """Compute SHA256 hash of a file's contents."""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(8192), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def load_watermarks() -> dict:
+    """Load watermark file mapping session_id -> content hash."""
+    if not WATERMARK_FILE.exists():
+        return {}
+    with open(WATERMARK_FILE) as f:
+        return json.load(f)
+
+
+def save_watermarks(watermarks: dict) -> None:
+    """Save watermark state."""
+    WATERMARK_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with open(WATERMARK_FILE, "w") as f:
+        json.dump(watermarks, f, indent=2)
 
 
 def connect_with_retry(url: str, max_retries: int = 10) -> pika.BlockingConnection:
@@ -125,6 +151,13 @@ def process_message(body: bytes) -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     output_file = OUTPUT_DIR / f"{basename}.ttl"
 
+    # SHA256 watermark: skip if file content hasn't changed since last processing
+    watermarks = load_watermarks()
+    current_hash = file_hash(container_path)
+    if watermarks.get(basename) == current_hash:
+        log("SKIP", f"{basename} (unchanged since last processing)")
+        return
+
     log("INFO", f"Processing: {basename}")
 
     # Import pipeline modules (deferred to avoid import errors during setup)
@@ -143,6 +176,10 @@ def process_message(body: bytes) -> None:
     # Upload to Fuseki
     ensure_dataset(FUSEKI_URL, FUSEKI_DATASET, auth=FUSEKI_AUTH)
     upload_turtle(FUSEKI_URL, FUSEKI_DATASET, str(output_file), auth=FUSEKI_AUTH)
+
+    # Update watermark after successful processing
+    watermarks[basename] = current_hash
+    save_watermarks(watermarks)
 
     log("DONE", f"{basename} -> {output_file} ({triple_count} triples)")
 

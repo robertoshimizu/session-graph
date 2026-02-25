@@ -57,7 +57,9 @@ def _ensure_agentic_init():
 CONFIDENCE_THRESHOLD = 0.7
 
 ALIASES_FILE = Path(__file__).parent / "entity_aliases.json"
-CACHE_DB = Path(__file__).parent / ".entity_cache.db"
+_CACHE_DIR = Path(__file__).parent / "cache"
+_CACHE_DIR.mkdir(exist_ok=True)
+CACHE_DB = _CACHE_DIR / "entity_cache.db"
 
 TECH_KEYWORDS = [
     'software', 'database', 'framework', 'library', 'programming',

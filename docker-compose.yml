@@ -46,7 +46,7 @@ services:
     volumes:
       - ~/.claude/projects:/claude-sessions:ro
       - ./output:/app/output
-      - ./pipeline/.triple_cache.db:/app/pipeline/.triple_cache.db
+      - ./pipeline/cache:/app/pipeline/cache
     restart: unless-stopped
 
 volumes:

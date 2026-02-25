@@ -29,7 +29,9 @@ truncation_count = 0
 # SQLite Triple Cache
 # =============================================================================
 
-_CACHE_PATH = Path(__file__).parent / ".triple_cache.db"
+_CACHE_DIR = Path(__file__).parent / "cache"
+_CACHE_DIR.mkdir(exist_ok=True)
+_CACHE_PATH = _CACHE_DIR / "triple_cache.db"
 
 
 def _get_cache_conn() -> sqlite3.Connection:
