@@ -7,6 +7,7 @@
 [![SPARQL](https://img.shields.io/badge/query-SPARQL-green.svg)](https://www.w3.org/TR/sparql11-query/)
 [![Apache Jena Fuseki](https://img.shields.io/badge/triplestore-Apache%20Jena%20Fuseki-red.svg)](https://jena.apache.org/documentation/fuseki2/)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+[![gitcgr](https://gitcgr.com/badge/robertoshimizu/session-graph.svg)](https://gitcgr.com/robertoshimizu/session-graph)
 
 ---
 
